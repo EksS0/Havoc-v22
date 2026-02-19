@@ -8,8 +8,7 @@ local supportedGames = {
 
 local executorBlacklist = {
     "solara",
-    "xeno",
-    "jjsploit"
+    "xeno"
 }
 
 local repo = 'https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/'
