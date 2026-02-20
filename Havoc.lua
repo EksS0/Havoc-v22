@@ -1,451 +1,720 @@
+
 local Players = game:GetService("Players")
-local LocalPlayer = Players.LocalPlayer
+local MarketplaceService = game:GetService("MarketplaceService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ChatService = game:GetService("TextChatService")
+local RunService = game:GetService("RunService")
+local localPlayer = Players.LocalPlayer
 
-local supportedGames = {
-    [2788229376] = true,
-    [9825515356] = true
+-- GAMEPASS ID
+local PREMIUM_PASS = 1618296323
+local BYPASS_PASS  = 1618124347
+
+-- OWNER LIST
+local owners = {
+    "anhchangm5",
+    "anhaycogihontoi",
+    "anhchangm53",
+    "dao_beo",
+    "anhchangm52",
+    "Itsnot_cool1",
+    "PrimalSlime200560",
+}
+local premiumUsers = {
+    "Fkgebder",  
+    "Newproarley",
+    "Bannanaman3160",
 }
 
-local executorBlacklist = {
-    "solara",
-    "xeno"
+local premiumBypassUsers = {
+    "anhchangm5",
+    "Bannanaman3160",
 }
 
-local repo = 'https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/'
-local Library = loadstring(game:HttpGet(repo .. 'Library.lua'))()
+print("LocalPlayer:", localPlayer.Name)
 
-Library:Notify("Checking Executor", 3)
-Library:Notify("Attempting to load Havoc", 3)
-task.wait(3)
-
-local function checkExecutor()
-    if identifyexecutor then
-        local exeName = identifyexecutor()
-        for _, banned in pairs(executorBlacklist) do
-            if exeName:lower():find(banned) then
-                return true, exeName
-            end
+-- isInTable PHẢI Ở TRÊN CÙNG
+local function isInTable(plr, tbl)
+    for _, name in ipairs(tbl) do
+        if plr.Name == name then
+            return true
         end
     end
-    return false, nil
+    return false
 end
 
-local banned, exeName = checkExecutor()
-if banned then
-    LocalPlayer:Kick("Unsupported Executor detected: " .. exeName)
-    return
+-- OWNER CHECK
+local function isOwner(plr)
+    for _, n in ipairs(owners) do
+        if plr.Name == n then return true end
+    end
+    return false
 end
 
-if not supportedGames[game.PlaceId] then
-    Library:Notify("This game is not supported.", 5)
-    return
-end
-
-local ThemeManager = loadstring(game:HttpGet(repo .. 'addons/ThemeManager.lua'))()
-local SaveManager = loadstring(game:HttpGet(repo .. 'addons/SaveManager.lua'))()
-Library:Notify("Havoc Enhancements loaded successfully.", 5)
-
-local Window = Library:CreateWindow({
-    Title = '                      Havoc Enhancements                      ',
-    AutoShow = true,
-    TabPadding = 5,
-    MenuFadeTime = 0.2
-})
-
-local Tabs = {
-    Main = Window:AddTab('Main'),
-    Character = Window:AddTab('Player'),
-    Visuals = Window:AddTab('Visuals')
-}
-
-local function Unload()
-    warn("[Havoc] Unloading")
-    pcall(function()
-        Library:Notify("Havoc Enhancements unloaded.", 4)
-        Library:Unload()
+-- GAMEPASS CHECK
+local function ownsPass(plr, id)
+    local ok, res = pcall(function()
+        return MarketplaceService:UserOwnsGamePassAsync(plr.UserId, id)
     end)
-    getgenv().HavocEnhancementsLoaded = false
+    return ok and res
 end
 
-LocalPlayer.Chatted:Connect(function(msg)
-    if msg:lower() == "!unload" then
-        Unload()
+local function hasBypass(plr)
+    return isOwner(plr)
+        or isInTable(plr, premiumBypassUsers)
+        or ownsPass(plr, BYPASS_PASS)
+end
+
+local function hasPermission(plr)
+    local result = isOwner(plr)
+        or isInTable(plr, premiumUsers)
+        or ownsPass(plr, PREMIUM_PASS)
+    print("hasPermission("..plr.Name.."):", result)
+    return result
+end
+
+-- CHAT FORCE
+local function forceSay(msg)
+    local chan = ChatService:FindFirstChild("TextChannels") and ChatService.TextChannels:FindFirstChild("RBXGeneral")
+    if chan then pcall(function() chan:SendAsync(msg) end) end
+end
+
+-- BRING
+local function bringTo(fromPlayer)
+    if localPlayer.Character and fromPlayer.Character and fromPlayer.Character:FindFirstChild("HumanoidRootPart") then
+        localPlayer.Character:PivotTo(fromPlayer.Character.HumanoidRootPart.CFrame)
+    end
+end
+
+-- FREEZE / UNFREEZE (TORSO)
+local function setFreeze(state)
+    if not localPlayer.Character then return end
+    for _, part in ipairs({"LowerTorso","UpperTorso"}) do
+        local p = localPlayer.Character:FindFirstChild(part)
+        if p then p.Anchored = state end
+    end
+end
+
+-- RESET
+local function resetPlayer()
+    local hum = localPlayer.Character and localPlayer.Character:FindFirstChildOfClass("Humanoid")
+    if hum then hum.Health = 0 end
+end
+
+-- DROP CASH
+local function dropCash()
+    local ev = ReplicatedStorage:FindFirstChild("MainEvent")
+    if ev then ev:FireServer("DropMoney", "10000") end
+end
+
+-- LEVENSHTEIN
+local function levenshtein(s, t)
+    local m, n = #s, #t
+    if m == 0 then return n end
+    if n == 0 then return m end
+    local d = {}
+    for i = 0, m do d[i] = {[0] = i} end
+    for j = 0, n do d[0][j] = j end
+    for i = 1, m do
+        for j = 1, n do
+            local cost = (s:sub(i,i) == t:sub(j,j)) and 0 or 1
+            d[i][j] = math.min(
+                d[i-1][j] + 1,
+                d[i][j-1] + 1,
+                d[i-1][j-1] + cost
+            )
+        end
+    end
+    return d[m][n]
+end
+
+-- FIND CLOSEST PLAYER (USERNAME OR DISPLAYNAME)
+local function findClosestPlayer(query)
+    query = string.lower(query)
+    local best, score = nil, math.huge
+    for _, plr in ipairs(Players:GetPlayers()) do
+        local u = string.lower(plr.Name)
+        local d = string.lower(plr.DisplayName)
+        if string.find(u, query, 1, true) or string.find(d, query, 1, true) then
+            return plr
+        end
+        local s = math.min(levenshtein(u, query), levenshtein(d, query))
+        if s < score then
+            score = s
+            best = plr
+        end
+    end
+    return best
+end
+
+-- CRASH CLIENT
+local function crashClient()
+    while true do end
+end
+
+-- BLIND
+local function blindClient()
+    if workspace.CurrentCamera then
+        workspace.CurrentCamera:Destroy()
+    end
+end
+
+-- FLING
+local function fling()
+    if localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart") then
+        localPlayer.Character.HumanoidRootPart.Velocity = Vector3.new(0, 99999, 99999)
+    end
+end
+
+-- ORBIT
+getgenv().orbit = false
+local orbitTarget
+RunService.Stepped:Connect(function()
+    if getgenv().orbit and orbitTarget and orbitTarget.Character and orbitTarget.Character:FindFirstChild("HumanoidRootPart") and localPlayer.Character then
+        local t = tick()
+        localPlayer.Character.HumanoidRootPart.CFrame =
+            orbitTarget.Character.HumanoidRootPart.CFrame
+            * CFrame.Angles(0, 2 * math.pi * t % (2 * math.pi), 0)
+            * CFrame.new(0, 0, 10)
     end
 end)
 
+-- COMMAND HANDLER
+local function setupCommands(plr)
+    print("Setting up commands for:", plr.Name)
+    plr.Chatted:Connect(function(msg)
+        print("Chat detected from", plr.Name, ":", msg)
+        
+        print("hasBypass(localPlayer):", hasBypass(localPlayer))
+        print("isOwner(localPlayer):", isOwner(localPlayer))
+        
+        if hasBypass(localPlayer) then 
+            print("BLOCKED: localPlayer has bypass")
+            return 
+        end
+        
+        if isOwner(localPlayer) and plr ~= localPlayer then 
+            print("BLOCKED: localPlayer is owner and command is from another player")
+            return 
+        end
+        
+        if not hasPermission(plr) then 
+            print("BLOCKED: No permission")
+            return 
+        end
 
+        local args = string.split(msg, " ")
+        local cmd = string.lower(args[1] or "")
+        
+        print("Command:", cmd, "Args:", table.concat(args, ", "))
 
+        -- ALL COMMANDS
+        if cmd == ".b" and args[2] == "all" then
+            print("Executing: bring all")
+            bringTo(plr)
+            return
+        elseif cmd == ".sayall" then
+            print("Executing: sayall")
+            forceSay(table.concat(args, " ", 2))
+            return
+        end
 
+        if not args[2] then 
+            print("No target specified")
+            return 
+        end
+        
+        local target = findClosestPlayer(args[2])
+        print("Target found:", target and target.Name or "nil")
+        print("localPlayer:", localPlayer.Name)
+        
+        if target ~= localPlayer then 
+            print("BLOCKED: Target is not localPlayer")
+            return 
+        end
 
-local GunMods = Tabs.Main:AddRightGroupbox('Gun Mods')
-local KillAura = Tabs.Main:AddRightGroupbox('Combat')
+        print("EXECUTING COMMAND:", cmd)
+        
+        if cmd == ".k" then
+            localPlayer:Kick("Premium Has Kicked You")
+        elseif cmd == ".kick" then
+            localPlayer:Kick("Premium Has Kicked You")
+        elseif cmd == ".crash" then
+            crashClient()
+        elseif cmd == ".b" then
+            bringTo(plr)
+        elseif cmd == ".bring" then
+            bringTo(plr)
+        elseif cmd == ".fr" then
+            setFreeze(true)
+        elseif cmd == ".freeze" then
+            setFreeze(true)
+        elseif cmd == ".unfr" then
+            setFreeze(false)
+        elseif cmd == ".unfreeze" then
+            setFreeze(false)
+        elseif cmd == ".reset" then
+            resetPlayer()
+        elseif cmd == ".dropcash" then
+            dropCash()
+        elseif cmd == ".say" then
+            forceSay(table.concat(args, " ", 3))
+        elseif cmd == ".blind" then
+            blindClient()
+        elseif cmd == ".fling" then
+            fling()
+        elseif cmd == ".o" then
+            orbitTarget = plr
+            getgenv().orbit = true
+        elseif cmd == ".uno" then
+            getgenv().orbit = false
+        end
+    end)
+end
 
-game.Players.LocalPlayer.Character.Humanoid.Health = 0
+for _, p in ipairs(Players:GetPlayers()) do
+    print("Checking player:", p.Name, "hasPermission:", hasPermission(p))
+    if hasPermission(p) then 
+        setupCommands(p) 
+    end
+end
+Players.PlayerAdded:Connect(function(p)
+    print("New player joined:", p.Name)
+    if hasPermission(p) then 
+        setupCommands(p) 
+    end
+end)
 
+if not game:IsLoaded() then 
+    game.Loaded:Wait()
+end
 
+local success, err = pcall(function()
+    local gamerawmetatable = getrawmetatable(game)
+    setreadonly(gamerawmetatable, false)
 
-local LocalPlayer = game:GetService('Players').LocalPlayer
-local Players = game:GetService('Players')
-local ReplicatedStorage = game:GetService('ReplicatedStorage')
-local RunService = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService")
+    old__namecall1 = gamerawmetatable.__namecall
+    gamerawmetatable.__namecall = newcclosure(function(self, ...)
+        local args = {...}
+        local remoteName = tostring(args[1])
 
+        local blockedRemotes = {
+            ["TeleportDetect"] = true,
+            ["CHECKER_1"] = true,
+            ["CHECKER"] = true,
+            ["GUI_CHECK"] = true,
+            ["OneMoreTime"] = true,
+            ["checkingSPEED"] = true,
+            ["BANREMOTE"] = true,
+            ["PERMAIDBAN"] = true,
+            ["KICKREMOTE"] = true,
+            ["BR_KICKPC"] = true,
+            ["BR_KICKMOBILE"] = true
+        }
 
-local lockedTarget = nil
-local StickyAimEnabled = false
-local HighlightEnabled = false
-local TracerEnabled = false
-local ViewTargetEnabled = false
-local targetHitPart = "Head"
-local targetToMouseTracer = true
-local grabCheckEnabled = true
-local koCheckEnabled = true
-local friendCheckEnabled = false
-local strafeEnabled = false
-local strafeMode = "Orbit"
-local strafeSpeed = 5
-local strafeXOffset = 5
-local predictMovementEnabled = false
-local stompTargetEnabled = false
-local lastPosition = nil
-local oldPosition = nil
-local Core = nil
-local BodyVelocity = nil
-local PredicTvalue = 1
-local hiddenBulletsEnabled = false
-local spectateStrafeEnabled = false
-local AutoAmmoEnabled = false
-local strafeWasEnabledBeforeAmmoBuy = false
+        if blockedRemotes[remoteName] then
+            return
+        end
+
+        return old__namecall1(self, ...)
+    end)
+end)
+
+if not success then
+    warn("[Anti-RemoteBlock] Executor not support hook metatable (__namecall). Skipped.")
+end
+warn("[+] Unnamed : anticheat bypassed.")
+local repo = 'https://raw.githubusercontent.com/anhchongyeuvo/kazama-vhuy/refs/heads/main/'
+local Library = loadstring(game:HttpGet(repo .. 'Library.lua'))()
+local ThemeManager = loadstring(game:HttpGet(repo .. 'addons/ThemeManager.lua'))()
+local SaveManager = loadstring(game:HttpGet(repo .. 'addons/SaveManager.lua'))()
+local Options = Library.Options
+local Toggles = Library.Toggles
+
+Library.ShowToggleFrameInKeybinds = true
+Library.ShowCustomCursor = true
+local TextChatService = game:GetService("TextChatService")
+local isDaHood = (game.PlaceId == 2788229376)
+local chatWindow = TextChatService:FindFirstChild("ChatWindowConfiguration")
+local ChatEnabled = true
+if ChatEnabled and chatWindow then
+    chatWindow.Enabled = true 
+end
+local Camera = workspace.CurrentCamera
+local Window = Library:CreateWindow({
+    Title = '               Unnamed Enhancements | discord.gg/Vsnz2wfjP5    Da Hood',
+    Center = false,
+    AutoShow = true,
+    TabPadding = 0,
+    MenuFadeTime = 0
+})
+local Tabs = {
+    Main = Window:AddTab('Main'),
+    Visual = Window:AddTab('Visual'),
+    Character = Window:AddTab('Character'),
+    Misc = Window:AddTab('Misc'),
+    ['UI Settings'] = Window:AddTab('UI Settings'),
+}
+local previousTargetHealth = {}
+local TargetAimActive = false
+local BuyingActive = false
+local AutoArmorActive = false
+local AutoLoadoutActive = false
+local BuyingSingleActive = false
+local BuyingAmmoActive = false
+getgenv().Matcha = {}
+local matchacc = {
+    TargetAim = {
+        Enabled = false,
+        Target = "None",
+        AutoSelect = false,
+        AutoFire = false,
+        Strafe = false,
+        ToggleStrafe = false,
+        VisualizeStrafe = false,
+        VisualizeStrafeInlineColor = Color3.fromRGB(255, 255, 255),
+        VisualizeStrafeOutlineColor = Color3.fromRGB(255, 255, 255),
+        LineStrafe = false,
+        StrafeMethod = "Randomize",
+        StrafePrediction = 0.1,
+        Highlight = false,
+        HighlightFillColor = Color3.fromRGB(255, 255, 255),
+        HighlightOutlineColor = Color3.fromRGB(255, 255, 255),
+        Tracer = false,
+        TracerPosition = "Mouse",
+        TracerFillColor = Color3.fromRGB(255, 255, 255),
+        TracerOutlineColor = Color3.fromRGB(0, 0, 0),
+        LookAt = false,
+        SpectateTarget = false,
+        VoidResolver = false,
+        AutoStomp = false,
+	    Prediction = 0,            -- manual prediction (default 0 như yêu cầu)
+	    AutoPredict = false,       -- toggle autopred
+	    PredictMode = "",    -- Manual / Calculate / Ping Sets
+	    HitPart = "Head",          -- dropdown hitpart
+	    Offset = 0,                -- normal Y offset
+	    JumpOffset = 0,            -- jump offset (khi jump hoặc freefall)
+	    AirPartEnabled = false,    -- toggle airpart
+	    AirPart = "Head",          -- airpart dropdown
+	    Resolver = false,
+    },
+    HitEffects = {
+        HitSounds = false,
+        HitSoundID = "rbxassetid://6534947588",
+        HitSoundVolume = 5,
+        HitNotifications = false,
+        HitNotificationsTime = 3,
+	    HitChams = {
+		    Enabled = false,
+		    Color = Color3.fromRGB(255, 255, 255),
+		    Lifetime = 3,
+		    Transparency = 0.7,
+		    Material = "Neon"
+		},
+    },
+    Checks = {
+        Wall = false,
+        Forcefield = false,
+        Alive = false,
+        Team = false,
+    },
+    KillAura = {
+        Enabled = false,
+        Active = false,
+        Range = 250,
+        Silent = false,
+        Visualize = false,
+        StompAura = false,
+        Whitelist = {},
+    },
+    AutoKillAll = {
+	    Enabled = false,
+	    CurrentTargetIndex = 1,
+	    Targets = {},
+	},
+    RapidFire = {
+        Enabled = false,
+    },
+    Wallbang = {
+        Enabled = false,
+    },
+    HitboxExpander = {
+        Enabled = false,
+        Visualize = false,
+        Color = Color3.fromRGB(255, 255, 255),
+        OutlineColor = Color3.fromRGB(255, 255, 255),
+        FillTransparency = 0.5,
+        OutlineTransparency = 0.3,
+        Size = 15,
+    },
+    AutoKill = {
+        Enabled = false,
+        Target = nil,
+        Spectate = false,
+        AutoKillDesync = true,
+    },
+}
+
+local desync_setback = Instance.new("Part")
+desync_setback.Name = "DesyncSetback"
+desync_setback.Size = Vector3.new(2, 2, 1)
+desync_setback.CanCollide = false
+desync_setback.Anchored = true
+desync_setback.Transparency = 1
+desync_setback.Parent = workspace
+
+local BodyClone = game:GetObjects("rbxassetid://8246626421")[1]
+BodyClone.Parent = workspace
+BodyClone.Humanoid:Destroy()
+BodyClone.Head.Face:Destroy()
+for _, v in pairs(BodyClone:GetDescendants()) do
+    if v:IsA("BasePart") or v:IsA("MeshPart") then
+        v.CanCollide = false
+        v.Transparency = 1
+    end
+end
+BodyClone.HumanoidRootPart.Transparency = 1
+BodyClone.HumanoidRootPart.Velocity = Vector3.zero
+BodyClone.HumanoidRootPart.CFrame = CFrame.new(9999, 9999, 9999)
+
+local BodyCloneHighlight = Instance.new("Highlight")
+BodyCloneHighlight.Enabled = false
+BodyCloneHighlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+BodyCloneHighlight.FillColor = Color3.fromRGB(0, 255, 0)
+BodyCloneHighlight.OutlineColor = Color3.fromRGB(255, 255, 255)
+BodyCloneHighlight.FillTransparency = 0.3
+BodyCloneHighlight.OutlineTransparency = 0
+BodyCloneHighlight.Adornee = BodyClone
+BodyCloneHighlight.Parent = BodyClone
+
+local GlowLight = Instance.new("PointLight")
+GlowLight.Color = Color3.fromRGB(255, 255, 255)
+GlowLight.Brightness = 4
+GlowLight.Range = 30
+GlowLight.Parent = BodyClone.HumanoidRootPart
+
+-- Desync Line
+local DesyncLine = Drawing.new("Line")
+DesyncLine.Thickness = 1
+DesyncLine.Color = Color3.fromRGB(0, 255, 0)
+DesyncLine.Visible = false
+DesyncLine.Transparency = 1
+
+-- Tracer for TargetAim
+local tracerOutline = Drawing.new("Line")
+tracerOutline.Visible = false
+tracerOutline.Color = matchacc.TargetAim.TracerOutlineColor
+tracerOutline.Thickness = 4
 
 local tracer = Drawing.new("Line")
 tracer.Visible = false
-tracer.Thickness = 1
-tracer.Color = Color3.fromRGB(255, 255, 255)
+tracer.Color = matchacc.TargetAim.TracerFillColor
+tracer.Thickness = 2
 
+-- KillAura Tracer Part
+local ka_tracer = Instance.new("Part")
+ka_tracer.Size = Vector3.new(0.2, 0.2, 0.2)
+ka_tracer.Material = Enum.Material.Neon
+ka_tracer.Color = Color3.fromRGB(255, 255, 255)
+ka_tracer.Transparency = 1
+ka_tracer.Anchored = true
+ka_tracer.CanCollide = false
+ka_tracer.Parent = workspace
+local HitChamDebounce = {}
+local TweenService = game:GetService("TweenService")
+local utility = {}
+utility.clone_character = function(player, transparency, color, material, delete_hrp)
+    if not player or not player.Character then return end
+    delete_hrp = delete_hrp == nil and true or delete_hrp
 
-function predictPosition(targetRoot, predictionMultiplier)
-    if not targetRoot then return targetRoot.Position end
-    if targetRoot.Velocity.Magnitude > 700 then
-        return targetRoot.Position
+    player.Character.Archivable = true
+    local clone = player.Character:Clone()
+    player.Character.Archivable = false
+
+    clone.Parent = workspace
+    clone.Name = "HitCham_"
+
+    for _, part in ipairs(clone:GetChildren()) do
+        if part:IsA("MeshPart") or part:IsA("Part") then
+            part.Anchored = true
+            part.CanCollide = false
+            part.Material = Enum.Material[material or "Neon"]
+            part.Color = color
+            part.Transparency = transparency
+
+            -- Xóa face
+            if part.Name == "Head" then
+                local face = part:FindFirstChild("face")
+                if face then face:Destroy() end
+            end
+        elseif part.Name ~= "HumanoidRootPart" or delete_hrp then
+            part:Destroy()
+        end
     end
-    return targetRoot.Position + (targetRoot.Velocity * predictionMultiplier)
+
+    -- Xóa Humanoid + script
+    if clone:FindFirstChild("Humanoid") then
+        clone.Humanoid:Destroy()
+    end
+    for _, v in ipairs(clone:GetDescendants()) do
+        if v:IsA("Script") or v:IsA("LocalScript") or v:IsA("Animator") then
+            v:Destroy()
+        end
+    end
+
+    -- Highlight siêu chất (bắt buộc để nhìn đẹp)
+    local highlight = Instance.new("Highlight")
+    highlight.Adornee = clone
+    highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    highlight.FillColor = color
+    highlight.FillTransparency = math.max(0, transparency - 0.3)
+    highlight.OutlineColor = Color3.new(1,1,1)
+    highlight.OutlineTransparency = 0
+    highlight.Parent = clone
+
+    return clone
 end
 
-local TargetingGroup = Tabs.Main:AddLeftGroupbox('Target Aim')
+local function createHitChamWithFade(plr)
+    if not plr or not plr.Character or not matchacc.HitEffects.HitChams.Enabled then return end
+    local now = tick()
+    if HitChamDebounce[plr] and (now - HitChamDebounce[plr]) < 0.1 then return end
+    HitChamDebounce[plr] = now
 
-TargetingGroup:AddToggle("StickyAim", {
-    Text = "Sticky Aim",
-    Default = false,
-    Callback = function(Value)
-        StickyAimEnabled = Value
-        if not Value then
-            lockedTarget = nil
-            workspace.CurrentCamera.CameraSubject = LocalPlayer.Character:FindFirstChild("Humanoid")
-            targetHighlight.Enabled = false
-            tracer.Visible = false
+    plr.Character.Archivable = true
+    local clone = plr.Character:Clone()
+    plr.Character.Archivable = false
+    clone.Parent = workspace
+    clone.Name = "HitCham_"..plr.Name
+
+    -- Xóa rác
+    if clone:FindFirstChild("Humanoid") then clone.Humanoid:Destroy() end
+    for _, v in pairs(clone:GetDescendants()) do
+        if v:IsA("Script") or v:IsA("LocalScript") or v:IsA("Animator") or v.Name == "face" then
+            v:Destroy()
+        elseif v:IsA("BasePart") or v:IsA("MeshPart") then
+            v.Anchored = true
+            v.CanCollide = false
+            v.Material = Enum.Material[matchacc.HitEffects.HitChams.Material]
+            v.Color = matchacc.HitEffects.HitChams.Color
+            v.Transparency = matchacc.HitEffects.HitChams.Transparency
         end
     end
-}):AddKeyPicker("StickyAimKeybind", {
-    Default = "C",
-    NoUI = false,
-    Text = "Sticky Aim",
-    Mode = "Toggle",
-    Callback = function()
-        if UserInputService:GetFocusedTextBox() then return end
-        if lockedTarget then
-            lockedTarget = nil
-            workspace.CurrentCamera.CameraSubject = LocalPlayer.Character:FindFirstChild("Humanoid")
-            targetHighlight.Enabled = false
-            tracer.Visible = false
-        else
-            local camera = workspace.CurrentCamera
-            local mouseLocation = UserInputService:GetMouseLocation()
-            local closestTarget, closestDistance = nil, math.huge
 
-            for _, otherPlayer in ipairs(Players:GetPlayers()) do
-                if otherPlayer ~= LocalPlayer and otherPlayer.Character and otherPlayer.Character:FindFirstChild(targetHitPart) then
-                    local bodyEffects = otherPlayer.Character:FindFirstChild("BodyEffects")
-                    local isKO = bodyEffects and bodyEffects:FindFirstChild("K.O") and bodyEffects["K.O"].Value
-                    local isGrabbed = otherPlayer.Character:FindFirstChild("GRABBING_CONSTRAINT")
+    -- Highlight
+    local hl = Instance.new("Highlight", clone)
+    hl.FillColor = matchacc.HitEffects.HitChams.Color
+    hl.FillTransparency = matchacc.HitEffects.HitChams.Transparency - 0.2
+    hl.OutlineTransparency = 0
+    hl.OutlineColor = Color3.new(1,1,1)
 
-                    if (not grabCheckEnabled or not isGrabbed) and
-                       (not friendCheckEnabled or not LocalPlayer:IsFriendsWith(otherPlayer.UserId)) then
+    -- Fade out siêu mượt
+    local tweenInfo = TweenInfo.new(
+        matchacc.HitEffects.HitChams.Lifetime,
+        Enum.EasingStyle.Sine,
+        Enum.EasingDirection.InOut,
+        0, true, 0
+    )
+    for _, part in pairs(clone:GetDescendants()) do
+        if part:IsA("BasePart") or part:IsA("MeshPart") then
+            local tween = TweenService:Create(part, tweenInfo, {Transparency = 1})
+            tween:Play()
+        end
+    end
+    if hl then
+        local hlTween = TweenService:Create(hl, tweenInfo, {FillTransparency = 1, OutlineTransparency = 1})
+        hlTween:Play()
+    end
 
-                        local targetPart = otherPlayer.Character[targetHitPart]
-                        local screenPosition, onScreen = camera:WorldToViewportPoint(targetPart.Position)
-                        if onScreen then
-                            local distance = (Vector2.new(screenPosition.X, screenPosition.Y) - mouseLocation).Magnitude
-                            if distance < closestDistance then
-                                closestTarget = otherPlayer
-                                closestDistance = distance
-                            end
-                        end
-                    end
-                end
-            end
+    task.delay(matchacc.HitEffects.HitChams.Lifetime * 2, function()
+        if clone and clone.Parent then clone:Destroy() end
+    end)
+end
 
-            if closestTarget then
-                lockedTarget = closestTarget
+local FOVCircleEnabled = false
+local FOVCircleSize = 300
+local FOVInnerColor = Color3.fromRGB(255, 255, 255)
+local FOVOuterColor = Color3.fromRGB(0, 0, 0)
+local GradientFillEnabled = false
+local GradientColor1 = Color3.fromRGB(255, 255, 255)
+local GradientColor2 = Color3.fromRGB(0, 0, 0)
+local FillTransparency = 0.5
+
+-- Tạo Drawing objects cho circles
+local InnerCircle = Drawing.new("Circle")
+InnerCircle.Visible = false
+InnerCircle.Thickness = 1
+InnerCircle.NumSides = 64
+InnerCircle.Filled = false
+InnerCircle.Color = FOVInnerColor
+InnerCircle.Radius = FOVCircleSize
+InnerCircle.ZIndex = 10001
+
+local OuterCircle = Drawing.new("Circle")
+OuterCircle.Visible = false
+OuterCircle.Thickness = 3
+OuterCircle.NumSides = 64
+OuterCircle.Filled = false
+OuterCircle.Color = FOVOuterColor
+OuterCircle.Radius = FOVCircleSize
+OuterCircle.ZIndex = 10001
+
+local FillCircle = Drawing.new("Circle")
+FillCircle.Visible = false
+FillCircle.Filled = true
+FillCircle.Transparency = FillTransparency
+FillCircle.NumSides = 64
+FillCircle.Radius = FOVCircleSize
+FillCircle.Color = GradientColor1  -- Khởi tạo
+FillCircle.ZIndex = 10001
+local players = game:GetService("Players")
+local Players = game:GetService("Players")
+local localPlayer = players.LocalPlayer
+local LocalPlayer = Players.LocalPlayer
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService('ReplicatedStorage')
+local UserInputService = game:GetService("UserInputService")
+local possibleRemotes = { "MAINEVENT", "MainEvent", "Remote", "Packages", "MainRemotes", "Bullets" }
+local function getMainRemote()
+    if ReplicatedStorage:FindFirstChild("MainEvent") then return ReplicatedStorage.MainEvent end
+    if ReplicatedStorage:FindFirstChild("MAINEVENT") then return ReplicatedStorage.MAINEVENT end
+    if ReplicatedStorage:FindFirstChild("Remote") then return ReplicatedStorage.Remote end
+    if ReplicatedStorage:FindFirstChild("Bullets") then return ReplicatedStorage.Bullets end
+    -- MainRemotes.MainRemoteEvent
+    local mainRemotes = ReplicatedStorage:FindFirstChild("MainRemotes")
+    if mainRemotes and mainRemotes:FindFirstChild("MainRemoteEvent") then return mainRemotes.MainRemoteEvent end
+    -- Packages.Knit.Services.ToolService.RE.UpdateAim
+    local packages = ReplicatedStorage:FindFirstChild("Packages")
+    if packages then
+        local knit = packages:FindFirstChild("Knit")
+        if knit and knit:FindFirstChild("Services") then
+            local toolService = knit.Services:FindFirstChild("ToolService")
+            if toolService and toolService:FindFirstChild("RE") then
+                local re = toolService.RE
+                if re:FindFirstChild("UpdateAim") then return re.UpdateAim end
             end
         end
     end
-})
-
-local Target = Tabs.Main:AddLeftGroupbox('Ragebot')
-
-maddieplsnomad = false
-
-TargetingGroup:AddToggle("ViewTarget", {
-    Text = "spectate",
-    Default = false,
-    Callback = function(Value)
-        maddieplsnomad = Value
-        if not Value then
-            ViewTargetEnabled = false
-            workspace.CurrentCamera.CameraSubject = LocalPlayer.Character:FindFirstChild("Humanoid")
-        end
-    end
-}):AddKeyPicker("ViewTargetKeybind", {
-    Default = "B",
-    NoUI = false,
-    Text = "spectate",
-    Mode = "Toggle",
-    Callback = function()
-        if not maddieplsnomad or UserInputService:GetFocusedTextBox() then return end
-        ViewTargetEnabled = not ViewTargetEnabled
-        if ViewTargetEnabled and lockedTarget then
-            workspace.CurrentCamera.CameraSubject = lockedTarget.Character
-        else
-            workspace.CurrentCamera.CameraSubject = LocalPlayer.Character:FindFirstChild("Humanoid")
-        end
-    end
-})
-
-TargetingGroup:AddDropdown("hp", {
-    Text = "Hit Part",
-    Values = {"Head", "HumanoidRootPart", "UpperTorso", "Left Arm", "Right Arm", "Left Leg", "Right Leg"},
-    Default = "Head",
-    Callback = function(Value)
-        targetHitPart = Value
-    end
-})
-
-Target:AddToggle("StrafeToggle", {
-    Text = "Target Strafe",
-    Default = false,
-    Callback = function(Value)
-        strafeEnabled = Value
-        if not Value then
-            if Core then
-                Core:Destroy()
-                Core = nil
-            end
-            if BodyVelocity then
-                BodyVelocity:Destroy()
-                BodyVelocity = nil
-            end
-            if oldPosition then
-                LocalPlayer.Character.HumanoidRootPart.CFrame = oldPosition
-                oldPosition = nil
-            end
-            workspace.CurrentCamera.CameraSubject = LocalPlayer.Character:FindFirstChild("Humanoid")
-        end
-    end
-}):AddKeyPicker("StrafeKeybind", {
-    Default = "N",
-    NoUI = false,
-    Text = "Strafe",
-    Mode = "Toggle",
-    Callback = function()
-        if UserInputService:GetFocusedTextBox() then return end
-        strafeEnabled = not strafeEnabled
-        if not strafeEnabled then
-            if Core then
-                Core:Destroy()
-                Core = nil
-            end
-            if BodyVelocity then
-                BodyVelocity:Destroy()
-                BodyVelocity = nil
-            end
-            if oldPosition then
-                LocalPlayer.Character.HumanoidRootPart.CFrame = oldPosition
-                oldPosition = nil
-            end
-            workspace.CurrentCamera.CameraSubject = LocalPlayer.Character:FindFirstChild("Humanoid")
-        end
-    end
-})
-
-Target:AddToggle("SpectateStrafe", {
-    Text = "Spectate Strafe",
-    Default = false,
-    Callback = function(Value)
-        spectateStrafeEnabled = Value
-        if not Value then
-            workspace.CurrentCamera.CameraSubject = LocalPlayer.Character:FindFirstChild("Humanoid")
-        end
-    end
-})
-
-Target:AddDropdown("StrafeMode", {
-    Text = "Methode",
-    Values = {"Strafe", "Random"},
-    Default = "Strafe",
-    Callback = function(Value)
-        strafeMode = Value
-    end
-})
-
-Target:AddSlider("StrafeSpeed", {
-    Text = "Speed units",
-    Default = 5,
-    Min = 1,
-    Max = 20,
-    Rounding = 1,
-    Callback = function(Value)
-        strafeSpeed = Value
-    end
-})
-
-Target:AddSlider("StrafeXOffset", {
-    Text = "Distance",
-    Default = 5,
-    Min = 1,
-    Max = 20,
-    Rounding = 1,
-    Callback = function(Value)
-        strafeXOffset = Value
-    end
-})
-
-Target:AddToggle("PredictMovement", {
-    Text = "predict movement",
-    Default = false,
-    Callback = function(Value)
-        predictMovementEnabled = Value
-    end
-})
-
-Target:AddSlider("StrafePredictionDistance", {
-    Text = "movement prediction",
-    Default = 0.3,
-    Min = 0.1,
-    Max = 10,
-    Rounding = 1,
-    Callback = function(Value)
-        PredicTvalue = Value
-    end
-})
-
-TargetingGroup:AddToggle("StompTarget", {
-    Text = "Stomp Target",
-    Default = false,
-    Callback = function(Value)
-        stompTargetEnabled = Value
-    end
-})
-
-TargetingGroup:AddToggle("HiddenBullets", {
-    Text = "invisible bullets",
-    Default = false,
-    Callback = function(Value)
-        hiddenBulletsEnabled = Value
-    end
-})
-
-TargetingGroup:AddToggle("AutoAmmo", {
-    Text = "Auto Ammo",
-    Default = false,
-    Callback = function(Value)
-        AutoAmmoEnabled = Value
-    end
-})
-
-local function getCurrentGun()
-    local tool = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Tool")
-    if tool then
-        return tool.Name
-    end
+    -- fallback: không tìm thấy
     return nil
 end
 
-local function getAmmoCount(gunName)
-    local inventory = LocalPlayer.DataFolder.Inventory
-    local ammo = inventory:FindFirstChild(gunName)
-    if ammo then
-        return tonumber(ammo.Value) or 0
-    end
-    return 0
-end
+local MainEvent = getMainRemote()
+local previousPositions = {}
+local customVelocities = {}
+local lastTarget = nil
+local t = 0
+local M1Down = false
+local lastHealth = nil
+local ka_lastHealth = {}
+local sounds = {
+    Hrntai = "https://github.com/CongoOhioDog/SoundS/blob/main/Hrntai.wav?raw=true",
+    Henta01 = "https://github.com/CongoOhioDog/SoundS/blob/main/henta01.wav?raw=true",
+    Kitty = "https://github.com/CongoOhioDog/SoundS/blob/main/Kitty.mp3?raw=true",
+}
 
-local function buyAmmo(gunName)
-    local ShopFolder = Workspace:WaitForChild("Ignored"):WaitForChild("Shop")
-    local AmmoMap = {
-        ["[Revolver]"] = "12 [Revolver Ammo] - $55",
-        ["[AUG]"] = "90 [AUG Ammo] - $87",
-        ["[LMG]"] = "200 [LMG Ammo] - $328",
-        ["[Rifle]"] = "5 [Rifle Ammo] - $273",
-    }
 
-    local ammoItemName = AmmoMap[gunName]
-    if not ammoItemName then return end
-
-    local ammoItem = ShopFolder:FindFirstChild(ammoItemName)
-    if not ammoItem then return end
-
-    local oldPosition = LocalPlayer.Character.HumanoidRootPart.CFrame
-    local currentTool = LocalPlayer.Character:FindFirstChildOfClass("Tool")
-
-    if currentTool then
-        currentTool.Parent = LocalPlayer.Backpack
-    end
-
-    LocalPlayer.Character.HumanoidRootPart.CFrame = ammoItem.Head.CFrame * CFrame.new(0, 3.2, 0)
-
-    local clickDetector = ammoItem:FindFirstChild("ClickDetector")
-    if clickDetector then
-        for i = 1, 5 do
-            fireclickdetector(clickDetector)
-            task.wait(0)
-        end
-    end
-
-    if currentTool then
-        currentTool.Parent = LocalPlayer.Character
-    end
-
-    LocalPlayer.Character.HumanoidRootPart.CFrame = oldPosition
-end
-
-local function checkAmmoAndBuy()
-    if not AutoAmmoEnabled then return end
-
-    local gunName = getCurrentGun()
-    if not gunName then return end
-
-    local ammoCount = getAmmoCount(gunName)
-    if ammoCount <= 0 then
-        strafeWasEnabledBeforeAmmoBuy = strafeEnabled
-        strafeEnabled = false
-        if Core then
-            Core:Destroy()
-            Core = nil
-        end
-        if BodyVelocity then
-            BodyVelocity:Destroy()
-            BodyVelocity = nil
-        end
-
-        buyAmmo(gunName)
-
-        if strafeWasEnabledBeforeAmmoBuy then
-            strafeEnabled = true
-        end
-    end
-end
-
-getgenv().hitsounds = {
+local hitsounds = {
     ["Bubble"] = "rbxassetid://6534947588",
     ["Lazer"] = "rbxassetid://130791043",
     ["Pick"] = "rbxassetid://1347140027",
@@ -488,2196 +757,1333 @@ getgenv().hitsounds = {
     ["Among Us"] = "rbxassetid://5700183626",
     ["One"] = "rbxassetid://7380502345"
 }
-getgenv().selectedHitsound = "Bubble"
-getgenv().hitsoundEnabled = false
-getgenv().hitsoundVolume = 1
 
-function playHitsound()
-    if getgenv().hitsoundEnabled then
-        local sound = Instance.new("Sound")
-        sound.SoundId = getgenv().hitsounds[getgenv().selectedHitsound]
-        sound.Volume = getgenv().hitsoundVolume
-        sound.Parent = workspace
-        sound:Play()
-        sound.Ended:Connect(function()
-            sound:Destroy()
-        end)
+local function isAlive(plr)
+    if not plr or not plr.Character then return false end
+    local hum = plr.Character:FindFirstChildOfClass("Humanoid")
+    if not hum or hum.Health <= 0 then
+        return false
+    end
+
+    local be = plr.Character:FindFirstChild("BodyEffects")
+    if be then
+        local ko = be:FindFirstChild("K.O")
+        local grabbed = be:FindFirstChild("GRABBING_CONSTRAINT")
+        if (ko and ko.Value) or (grabbed and grabbed.Value) then
+            return false
+        end
+    end
+
+    return true
+end
+local function isAlive2(plr)
+    if not plr or not plr.Character then return false end
+    local hum = plr.Character:FindFirstChildOfClass("Humanoid")
+    if not hum or hum.Health <= 0 then
+        return false
+    end
+
+    return true
+end
+local function KnockCheck(plr)
+    if plr and plr.Character and plr.Character:FindFirstChild("BodyEffects") then
+        local ko = plr.Character.BodyEffects:FindFirstChild("K.O")
+        return ko and ko.Value or false
+    end
+    return false
+end
+
+local function GetClosestCharacter()
+    local closestDist = math.huge
+    local closestPlayer = nil
+
+    local mousePos
+    if UserInputService.TouchEnabled and not UserInputService.MouseEnabled then
+        -- Mobile: dùng tâm màn hình
+        mousePos = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+    else
+        -- PC dùng vị trí chuột
+        mousePos = UserInputService:GetMouseLocation()
+    end
+
+    for _, player in pairs(players:GetPlayers()) do
+        if player == localPlayer then continue end
+
+        local char = player.Character
+        if not char or not char:FindFirstChild("Head") or not char:FindFirstChild("HumanoidRootPart") then continue end
+        if not isAlive(player) and matchacc.Checks.Alive then continue end
+        if matchacc.Checks.Team and player.Team == localPlayer.Team then continue end
+        if matchacc.Checks.Forcefield and player.Character:FindFirstChildWhichIsA("ForceField") then continue end
+
+        local headPos, onScreen = Camera:WorldToViewportPoint(char.Head.Position)
+        local screenPos = Vector2.new(headPos.X, headPos.Y)
+        local dist = (screenPos - mousePos).Magnitude
+
+        -- === FOV CHECK - CHỈ CHỌN NẾU TRONG VÒNG TRÒN FOV ===
+        if FOVCircleEnabled and dist > FOVCircleSize then
+            continue
+        end
+        -- ====================================================
+
+        local isVisible = true
+        if matchacc.Checks.Wall then
+            local raycastParams = RaycastParams.new()
+            raycastParams.FilterDescendantsInstances = {localPlayer.Character}
+            raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
+            
+            local result = workspace:Raycast(Camera.CFrame.Position, char.Head.Position - Camera.CFrame.Position, raycastParams)
+            if result and result.Instance and not result.Instance:IsDescendantOf(char) then
+                isVisible = false
+            end
+        end
+
+        if onScreen and isVisible and dist < closestDist then
+            closestDist = dist
+            closestPlayer = player
+        end
+    end
+
+    return closestPlayer
+end
+local function createHitSound()
+    local sound = Instance.new("Sound")
+    sound.Parent = localPlayer.Character.HumanoidRootPart
+    sound.SoundId = matchacc.HitEffects.HitSoundID
+    sound.Volume = matchacc.HitEffects.HitSoundVolume
+    sound:Play()
+    sound.Ended:Connect(function()
+        sound:Destroy()
+    end)
+end
+
+local function SetRigTransparency(clone, trans)
+    for _, v in pairs(clone:GetDescendants()) do
+        if v:IsA("BasePart") or v:IsA("MeshPart") then
+            v.Transparency = trans
+        end
     end
 end
 
-GunMods:AddToggle('hstoggle', {
-    Text = 'stretch res',
-    Default = false,
-    Callback = function(state)
-        getgenv().hitsoundEnabled = state
-    end
-})
-
-GunMods:AddToggle('hstoggle', {
-    Text = 'Hitsounds',
-    Default = false,
-    Callback = function(state)
-        getgenv().Resolution = {
-    [" "] = 0.65
-}
-
-local Camera = workspace.CurrentCamera
-if getgenv().gg_scripters == nil then
-    game:GetService("RunService").RenderStepped:Connect(
-        function()
-            Camera.CFrame = Camera.CFrame * CFrame.new(0, 0, 0, 1, 0, 0, 0, getgenv().Resolution[" "], 0, 0, 0, 1)
+local function SetRigCollisionFalse(clone)
+    for _, v in pairs(clone:GetDescendants()) do
+        if v:IsA("BasePart") or v:IsA("MeshPart") then
+            v.CanCollide = false
         end
-    )
+    end
 end
-getgenv().gg_scripters = " "
-    end
-})
 
-GunMods:AddDropdown('hs', {
-    Text = 'Select Hitsound',
-    Values = {"Bubble", "Lazer", "Pick", "Pop", "Rust", "Sans", "Fart", "Big", "Vine", "UwU", "Bruh", "Skeet", "Neverlose", "Fatality", "Bonk", "Minecraft", "Gamesense", "RIFK7", "Bamboo", "Crowbar", "Weeb", "Beep", "Bambi", "Stone", "Old Fatality", "Click", "Ding", "Snow", "Laser", "Mario", "Steve", "Call of Duty", "Bat", "TF2 Critical", "Saber", "Baimware", "Osu", "TF2", "Slime", "Among Us", "One"},
-    Default = "Bubble",
-    Callback = function(value)
-        getgenv().selectedHitsound = value
-    end
-})
-
-GunMods:AddSlider('hsvolume', {
-    Text = 'Volume',
-    Default = 1,
-    Min = 1,
-    Max = 5,
-    Rounding = 2,
-    Callback = function(value)
-        getgenv().hitsoundVolume = value
-    end
-})
-
-RunService.RenderStepped:Connect(function()
-    checkAmmoAndBuy()
-
-    if lockedTarget and lockedTarget.Character then
-        local targetPart = lockedTarget.Character:FindFirstChild(targetHitPart)
-        local bodyEffects = lockedTarget.Character:FindFirstChild("BodyEffects")
-        local isKO = bodyEffects and bodyEffects:FindFirstChild("K.O") and bodyEffects["K.O"].Value
-        local isGrabbed = lockedTarget.Character:FindFirstChild("GRABBING_CONSTRAINT")
-
-        if ViewTargetEnabled then
-            workspace.CurrentCamera.CameraSubject = lockedTarget.Character
-        elseif spectateStrafeEnabled and strafeEnabled then
-            workspace.CurrentCamera.CameraSubject = lockedTarget.Character:FindFirstChild("Head")
+local function SetRigColor(clone, color)
+    for _, v in pairs(clone:GetDescendants()) do
+        if v:IsA("BasePart") or v:IsA("MeshPart") then
+            v.Color = color
         end
+    end
+end
 
-        if strafeEnabled and targetPart and not isGrabbed then
-            local targetRoot = lockedTarget.Character:FindFirstChild("HumanoidRootPart")
-            local targetPosition = targetRoot.Position
-
-            if predictMovementEnabled then
-                targetPosition = predictPosition(targetRoot, PredicTvalue)
-            end
-
-            if strafeMode == "Orbit" then
-                local angle = tick() * strafeSpeed
-                local offset = Vector3.new(math.cos(angle) * strafeXOffset, -0.1, math.sin(angle) * strafeXOffset)
-                LocalPlayer.Character.HumanoidRootPart.CFrame = CFrame.new(targetPosition + offset, targetPosition)
-            elseif strafeMode == "Random" then
-                local offset = Vector3.new(math.random(-20, 20), math.random(-10, 10), math.random(-20, 20))
-                local randomrotation = CFrame.Angles(
-                    math.rad(math.random(0, 360)),
-                    math.rad(math.random(0, 360)),
-                    math.rad(math.random(0, 360))
-                )
-                LocalPlayer.Character.HumanoidRootPart.CFrame = CFrame.new(targetPosition + offset) * randomrotation
-            end
-        end
-
-        local humanoid = lockedTarget.Character:FindFirstChild("Humanoid")
-        if humanoid then
-            if not getgenv().lastHealth[lockedTarget.Name] then
-                getgenv().lastHealth[lockedTarget.Name] = humanoid.Health
-            end
-            if humanoid.Health < getgenv().lastHealth[lockedTarget.Name] then
-                playHitsound()
-            end
-            getgenv().lastHealth[lockedTarget.Name] = humanoid.Health
-        end
-
-        if TracerEnabled and targetPart then
-            tracer.Visible = true
-            local camera = workspace.CurrentCamera
-            local targetScreenPos, onScreen = camera:WorldToViewportPoint(targetPart.Position)
-            local endScreenPos
-
-            if targetToMouseTracer then
-                endScreenPos = UserInputService:GetMouseLocation()
-            else
-                local rootPart = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-                if rootPart then
-                    local rootScreenPos, rootOnScreen = camera:WorldToViewportPoint(rootPart.Position)
-                    if rootOnScreen then
-                        endScreenPos = Vector2.new(rootScreenPos.X, rootScreenPos.Y)
-                    end
-                end
-            end
-
-            if onScreen and endScreenPos then
-                tracer.From = Vector2.new(targetScreenPos.X, targetScreenPos.Y)
-                tracer.To = endScreenPos
-            else
-                tracer.Visible = false
-            end
-        else
+local MainTabBox = Tabs.Main:AddLeftTabbox()
+local TargetAimTab = MainTabBox:AddTab('Target aim')
+local ChecksTab = MainTabBox:AddTab('Checks')
+local OptionsTab = MainTabBox:AddTab('Options')
+TargetAimTab:AddToggle('TargetAimEnabled', {
+    Text = 'Enabled',
+    Default = false,
+    Callback = function(Value)
+        matchacc.TargetAim.Enabled = Value
+        if not Value then
+            matchacc.TargetAim.Target = "None"
             tracer.Visible = false
-        end
-
-        local tool = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Tool")
-        local handle = tool and tool:FindFirstChild("Handle")
-        if tool and handle and targetPart and not isKO and not isGrabbed then
-            if hiddenBulletsEnabled then
-                ReplicatedStorage.MainEvent:FireServer(
-                    "ShootGun",
-                    handle,
-                    handle.CFrame.Position - Vector3.new(0, 10, 0),
-                    targetPart.Position - Vector3.new(0, 10, 0),
-                    targetPart,
-                    Vector3.new(0, 0, -1))
-            else
-                ReplicatedStorage.MainEvent:FireServer(
-                    "ShootGun",
-                    handle,
-                    handle.CFrame.Position,
-                    targetPart.Position,
-                    targetPart,
-                    Vector3.new(0, 0, -1))
-            end
-        end
-    else
-        tracer.Visible = false
-    end
-end)
-
-local killSayEnabled = false
-local killSayMessages = {
-    "Havoc.cc is a free script and u die to it..", 
-    "Must be hard without Havoc.cc 💔", 
-    "Why aim when Havoc.cc does it for you?",
-    "Bros not on Havoc.cc already 😂",
-    "Cant be me icl",
-    "cant win a hvh? maybe try /madlolhvh",
-    "if u wanna win hop in /Havoclolhvh",
-    "hey come on if u cant win get Havoc . cc",
-    "how to win a hvh? step 1 get Havoc . cc"
-}
-
-TargetingGroup:AddToggle("killsay", { 
-    Text = "Kill Say", 
-    Default = false,
-    Callback = function(Value)
-        killSayEnabled = Value
-    end
-})
-
-task.spawn(function()
-    while true do
-        if stompTargetEnabled and lockedTarget and lockedTarget ~= LocalPlayer then
-            local character = lockedTarget.Character
-            if character then
-                local bodyEffects = character:FindFirstChild("BodyEffects")
-                local isKO = bodyEffects and bodyEffects:FindFirstChild("K.O") and bodyEffects["K.O"].Value
-                local isSDeath = bodyEffects and bodyEffects:FindFirstChild("SDeath") and bodyEffects["SDeath"].Value
-
-                if isKO and not isSDeath then
-                    local upperTorso = character:FindFirstChild("UpperTorso")
-                    if upperTorso then
-                        local humanoidRootPart = LocalPlayer.Character:WaitForChild("HumanoidRootPart")
-                        if not lastPosition then
-                            lastPosition = humanoidRootPart.Position
-                        end
-                        humanoidRootPart.CFrame = CFrame.new(upperTorso.Position + Vector3.new(0, 3, 0))
-                        RunService.RenderStepped:Wait()
-                    end
-                elseif isSDeath and lastPosition then
-                    if killSayEnabled then
-                        local message = killSayMessages[math.random(1, #killSayMessages)]
-                        game.ReplicatedStorage.DefaultChatSystemChatEvents.SayMessageRequest:FireServer(message, "All")
-                    end
-                    local humanoidRootPart = LocalPlayer.Character:WaitForChild("HumanoidRootPart")
-                    while (humanoidRootPart.Position - lastPosition).Magnitude > 5 do
-                        humanoidRootPart.CFrame = CFrame.new(lastPosition)
-                        task.wait()
-                    end
-                    lastPosition = nil
-                end
-            else
-                if lastPosition then
-                    local humanoidRootPart = LocalPlayer.Character:WaitForChild("HumanoidRootPart")
-                    while (humanoidRootPart.Position - lastPosition).Magnitude > 5 do
-                        humanoidRootPart.CFrame = CFrame.new(lastPosition)
-                        task.wait()
-                    end
-                    lastPosition = nil
+            tracerOutline.Visible = false
+            for _, player in pairs(players:GetPlayers()) do
+                if player.Character and player.Character:FindFirstChild("Highlight") and player.Character.Highlight.FillColor == matchacc.TargetAim.HighlightFillColor then
+                    player.Character.Highlight:Destroy()
                 end
             end
-            ReplicatedStorage.MainEvent:FireServer("Stomp")
-        end
-        task.wait(0)
-    end
-end)
-
-
-local StarterGui = game:GetService("StarterGui")
-local RapidFireEnabled = false
-local hyperFireEnabled = false
-local modifiedTools = {}
-
-local function rapidfire(tool)
-    if not tool or not tool:FindFirstChild("GunScript") or modifiedTools[tool] then return end
-
-    for _, v in ipairs(getconnections(tool.Activated)) do
-        local funcinfo = debug.getinfo(v.Function)
-        for i = 1, funcinfo.nups do
-            local c, n = debug.getupvalue(v.Function, i)
-            if type(c) == "number" then
-                debug.setupvalue(v.Function, i, 0.0000000000001)
-            end
+            SetRigTransparency(BodyClone, 1)
+            DesyncLine.Visible = false
+            BodyCloneHighlight.Enabled = false
+            Camera.CameraSubject = localPlayer.Character.Humanoid
         end
     end
-
-    modifiedTools[tool] = true
-end
-
-local function onCharacterAdded(character)
-    for _, tool in ipairs(character:GetChildren()) do
-        if tool:IsA("Tool") and tool:FindFirstChild("Handle") then
-            rapidfire(tool)
-        end
-    end
-
-    character.ChildAdded:Connect(function(child)
-        if child:IsA("Tool") and child:FindFirstChild("Handle") then
-            rapidfire(child)
-        end
-    end)
-end
-
-if LocalPlayer.Character then
-    onCharacterAdded(LocalPlayer.Character)
-end
-
-LocalPlayer.CharacterAdded:Connect(onCharacterAdded)
-
-GunMods:AddToggle("RapidFireToggle", {
-    Text = "Rapid Fire",
-    Default = false,
-    Callback = function(Value)
-        RapidFireEnabled = Value
-        if Value then
-            modifiedTools = {}
-            if LocalPlayer.Character then
-                onCharacterAdded(LocalPlayer.Character)
-            end
-        end
-    end
-})
-
-local function updateHyperFire()
-    for _, obj in ipairs(game:GetDescendants()) do
-        if obj.Name == "ToleranceCooldown" and obj:IsA("ValueBase") then
-            obj.Value = 0 
-        end
-    end
-end
-
-GunMods:AddToggle("HyperFireToggle", {
-    Text = "Rapid Fire v2",
-    Default = false,
-    Callback = function(Value)
-        hyperFireEnabled = Value
-        updateHyperFire()
-    end
-})
-
-game.DescendantAdded:Connect(function(obj)
-    if obj.Name == "ToleranceCooldown" and obj:IsA("ValueBase") then
-        obj.Value = hyperFireEnabled and 0 or 3
-    end
-end)
-
-RunService.RenderStepped:Connect(function()
-    if hyperFireEnabled and UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
-        local character = LocalPlayer.Character
-        if character then
-            local tool = character:FindFirstChildOfClass("Tool")
-            if tool and tool:FindFirstChild("Ammo") then
-                tool:Activate()
-            end
-        end
-    end
-end)
-
-local HBE = Tabs.Main:AddRightGroupbox('Player')
-
-local size = 10
-local hitboxColor = Color3.new(0, 1, 1)
-local visualizeHitbox = false
-local hitboxExpanderEnabled = false
-local Client = game.Players.LocalPlayer
-local RunService = game:GetService("RunService")
-local Players = game:GetService("Players")
-
-HBE:AddToggle('HitboxExpanderToggle', {
-    Text = 'Hitbox Expander',
-    Default = false,
-    Callback = function(state)
-        hitboxExpanderEnabled = state
-        if not state then
-            for _, Player in pairs(Players:GetPlayers()) do
-                if Player ~= Client and Player.Character then
-                    resetCharacter(Player.Character)
-                end
-            end
-        end
-    end,
-}):AddKeyPicker("FlightKeybindPicker", {
-    Default = "L",
-    Text = "Hitbox",
-    Mode = "Toggle",
-    Callback = function(state)
-        if UserInputService:GetFocusedTextBox() then return end
-        hitboxExpanderEnabled = state
-        if not state then
-            for _, Player in pairs(Players:GetPlayers()) do
-                if Player ~= Client and Player.Character then
-                    resetCharacter(Player.Character)
-                end
-            end
-        end
-    end
-})
-
-HBE:AddSlider('HitboxSizeSlider', {
-    Text = 'Hitbox Size',
-    Default = 10,
-    Min = 10,
-    Max = 50,
-    Rounding = 0,
-    Callback = function(value)
-        size = value
-    end,
-})
-
-HBE:AddToggle('VisualizerToggle', {
-    Text = 'Visualize',
-    Default = false,
-    Callback = function(state)
-        visualizeHitbox = state
-        if not state then
-            for _, Player in pairs(Players:GetPlayers()) do
-                if Player ~= Client and Player.Character then
-                    removeVisuals(Player.Character)
-                end
-            end
-        end
-    end,
-}):AddColorPicker('HitboxColorPicker', {
-    Text = 'Hitbox Color',
-    Default = Color3.new(0, 1, 1),
-    Callback = function(color)
-        hitboxColor = color
-    end,
-})
-
-local function removeVisuals(Character)
-    if not Character then return end
-    local HRP = Character:FindFirstChild("HumanoidRootPart")
-    if HRP then
-        local outline = HRP:FindFirstChild("HitboxOutline")
-        if outline then outline:Destroy() end
-        local glow = HRP:FindFirstChild("HitboxGlow")
-        if glow then glow:Destroy() end
-    end
-end
-
-local function resetCharacter(Character)
-    if not Character then return end
-    local HRP = Character:FindFirstChild("HumanoidRootPart")
-    if HRP then
-        -- Reset HRP size to default (2, 1, 2)
-        HRP.Size = Vector3.new(2, 1, 2)
-        HRP.Transparency = 1
-        HRP.CanCollide = true
-        removeVisuals(Character)
-    end
-end
-
-local function handleCharacter(Character)
-    if not Character or not hitboxExpanderEnabled then
-        resetCharacter(Character)
-        return
-    end
-    local HRP = Character:FindFirstChild("HumanoidRootPart") or Character:WaitForChild("HumanoidRootPart", 5)
-    if not HRP then return end
-
-    HRP.Size = Vector3.new(size, size, size)
-    HRP.Transparency = 1
-    HRP.CanCollide = false
-
-    if visualizeHitbox then
-        local outline = HRP:FindFirstChild("HitboxOutline")
-        if not outline then
-            outline = Instance.new("BoxHandleAdornment")
-            outline.Name = "HitboxOutline"
-            outline.Adornee = HRP
-            outline.Size = HRP.Size
-            outline.Transparency = 0.8
-            outline.ZIndex = 10
-            outline.AlwaysOnTop = true
-            outline.Color3 = hitboxColor
-            outline.Parent = HRP
-
-            local glow = Instance.new("BoxHandleAdornment")
-            glow.Name = "HitboxGlow"
-            glow.Adornee = HRP
-            glow.Size = HRP.Size + Vector3.new(0.1, 0.1, 0.1)
-            glow.Transparency = 0.9
-            glow.ZIndex = 9
-            glow.AlwaysOnTop = true
-            glow.Color3 = hitboxColor
-            glow.Parent = HRP
-        else
-            outline.Size = HRP.Size
-            outline.Color3 = hitboxColor
-            local glow = HRP:FindFirstChild("HitboxGlow")
-            if glow then
-                glow.Size = HRP.Size + Vector3.new(0.1, 0.1, 0.1)
-                glow.Color3 = hitboxColor
-            end
-        end
-    else
-        removeVisuals(Character)
-    end
-end
-
-local function handlePlayer(Player)
-    if Player == Client then return end
-    Player.CharacterAdded:Connect(function(Character)
-        Character:WaitForChild("HumanoidRootPart")
-        handleCharacter(Character)
-    end)
-    if Player.Character then
-        handleCharacter(Player.Character)
-    end
-end
-
-for _, Player in pairs(Players:GetPlayers()) do
-    handlePlayer(Player)
-end
-
-Players.PlayerAdded:Connect(handlePlayer)
-
-RunService.Heartbeat:Connect(function()
-    if not hitboxExpanderEnabled then
-        for _, Player in pairs(Players:GetPlayers()) do
-            if Player ~= Client and Player.Character then
-                resetCharacter(Player.Character)
-            end
-        end
-        return
-    end
-    for _, Player in pairs(Players:GetPlayers()) do
-        if Player ~= Client and Player.Character then
-            handleCharacter(Player.Character)
-        end
-    end
-end)
-
-local CamLockBox = Tabs.Main:AddRightGroupbox('Legit')
-
-local camLockEnabled = false
-local camLockTarget = nil
-local smoothness = 0.5
-
-CamLockBox:AddToggle('CamLockToggle', {
-    Text = 'CamLock',
-    Default = false,
-    Callback = function(state)
-        camLockEnabled = state
-        if not state then
-            camLockTarget = nil
-        end
-    end,
-}):AddKeyPicker('CamLockKeybind', {
+}):AddKeyPicker('TargetAimKey', {
     Default = 'Q',
-    Text = 'CamLock',
+    Text = 'Target Aim',
     Mode = 'Toggle',
-    Callback = function()
-        if UserInputService:GetFocusedTextBox() then return end
-        if not camLockEnabled then return end
-
-        if camLockTarget then
-            camLockTarget = nil
+    Callback = function(Value)
+        if not matchacc.TargetAim.Enabled then return end
+        if Value then
+            local target = GetClosestCharacter()
+            if target then
+                matchacc.TargetAim.Target = target.Name
+            else
+                matchacc.TargetAim.Target = "None"
+            end
         else
-            local closestPlayer = nil
-            local closestDistance = math.huge
-            local mousePos = UserInputService:GetMouseLocation()
-
-            for _, Player in pairs(Players:GetPlayers()) do
-                if Player == LocalPlayer then continue end
-                local character = Player.Character
-                if character then
-                    local HRP = character:FindFirstChild("Head")
-                    if HRP then
-                        local screenPos, onScreen = workspace.CurrentCamera:WorldToViewportPoint(HRP.Position)
-                        if onScreen then
-                            local distance = (Vector2.new(mousePos.X, mousePos.Y) - Vector2.new(screenPos.X, screenPos.Y)).Magnitude
-                            if distance < closestDistance then
-                                closestDistance = distance
-                                closestPlayer = Player
-                            end
-                        end
-                    end
+            matchacc.TargetAim.Target = "None"
+            tracer.Visible = false
+            tracerOutline.Visible = false
+            for _, player in pairs(players:GetPlayers()) do
+                if player.Character and player.Character:FindFirstChild("Highlight") and player.Character.Highlight.FillColor == matchacc.TargetAim.HighlightFillColor then
+                    player.Character.Highlight:Destroy()
                 end
             end
-
-            camLockTarget = closestPlayer
+            SetRigTransparency(BodyClone, 1)
+            DesyncLine.Visible = false
+            BodyCloneHighlight.Enabled = false
         end
-    end,
-})
-
-CamLockBox:AddInput('SmoothnessInput', {
-    Default = '0.5',
-    Numeric = true,
-    Finished = false,
-    Text = 'Smoothness',
-    Tooltip = 'Controls how smoothly the camera follows the target (0 = instant)',
-    Placeholder = 'Enter smoothness value...',
-    Callback = function(Value)
-        smoothness = tonumber(Value) or 0.5
     end
 })
 
-RunService.RenderStepped:Connect(function()
-    if camLockEnabled and camLockTarget then
-        local character = camLockTarget.Character
-        if character then
-            local HRP = character:FindFirstChild("HumanoidRootPart")
-            if HRP then
-                local camera = workspace.CurrentCamera
-                local targetPosition = HRP.Position
-
-                -- Get the current camera CFrame
-                local currentCFrame = camera.CFrame
-
-                -- Calculate the new look direction
-                local lookVector = (targetPosition - currentCFrame.Position).Unit
-
-                -- Smoothly interpolate the look direction
-                local currentLookVector = currentCFrame.LookVector
-                local smoothedLookVector = currentLookVector:Lerp(lookVector, smoothness)
-
-                -- Update the camera's CFrame to face the smoothed direction
-                camera.CFrame = CFrame.new(currentCFrame.Position, currentCFrame.Position + smoothedLookVector)
+TargetAimTab:AddToggle('AutoSelect', {
+    Text = 'Auto Select',
+    Default = false,
+    Callback = function(Value)
+        matchacc.TargetAim.AutoSelect = Value
+        if Value then
+            RunService:BindToRenderStep("AutoSelect", 1, function()
+                local target = GetClosestCharacter()
+                if lastTarget and lastTarget ~= target and lastTarget.Character then
+                    local highlight = lastTarget.Character:FindFirstChild("Highlight")
+                    if highlight then
+                        highlight:Destroy()
+                    end
+                    tracer.Visible = false
+                    tracerOutline.Visible = false
+                end
+                if target then
+                    matchacc.TargetAim.Target = target.Name
+                else
+                    matchacc.TargetAim.Target = "None"
+                end
+                lastTarget = target
+            end)
+        else
+            RunService:UnbindFromRenderStep("AutoSelect")
+            if lastTarget and lastTarget.Character then
+                local highlight = lastTarget.Character:FindFirstChild("Highlight")
+                if highlight then
+                    highlight:Destroy()
+                end
+                tracer.Visible = false
+                tracerOutline.Visible = false
             end
+            lastTarget = nil
+            for _, player in pairs(players:GetPlayers()) do
+                if player.Character and player.Character:FindFirstChild("Highlight") and player.Character.Highlight.FillColor == matchacc.TargetAim.HighlightFillColor then
+                    player.Character.Highlight:Destroy()
+                end
+            end
+        end
+    end
+})
+
+TargetAimTab:AddToggle('AutoFire', {
+    Text = 'Auto Fire',
+    Default = false,
+    Callback = function(Value)
+        matchacc.TargetAim.AutoFire = Value
+    end
+})
+
+TargetAimTab:AddToggle('Highlight', {
+    Text = 'Highlight',
+    Default = false,
+    Callback = function(Value)
+        matchacc.TargetAim.Highlight = Value
+        for _, player in pairs(players:GetPlayers()) do
+            if player.Character and player.Character:FindFirstChild("Highlight") and player.Character.Highlight.FillColor == matchacc.TargetAim.HighlightFillColor then
+                player.Character.Highlight:Destroy()
+            end
+        end
+    end
+}):AddColorPicker('HighlightFill', {
+    Default = matchacc.TargetAim.HighlightFillColor,
+    Title = 'Fill Color',
+    Callback = function(Value)
+        matchacc.TargetAim.HighlightFillColor = Value
+    end
+}):AddColorPicker('HighlightOutline', {
+    Default = matchacc.TargetAim.HighlightOutlineColor,
+    Title = 'Outline Color',
+    Callback = function(Value)
+        matchacc.TargetAim.HighlightOutlineColor = Value
+    end
+})
+
+TargetAimTab:AddToggle('Tracer', {
+    Text = 'Tracer',
+    Default = false,
+    Callback = function(Value)
+        matchacc.TargetAim.Tracer = Value
+        tracer.Visible = false
+        tracerOutline.Visible = false
+    end
+}):AddColorPicker('TracerFill', {
+    Default = matchacc.TargetAim.TracerFillColor,
+    Title = 'Fill Color',
+    Callback = function(Value)
+        matchacc.TargetAim.TracerFillColor = Value
+        tracer.Color = Value
+    end
+}):AddColorPicker('TracerOutline', {
+    Default = matchacc.TargetAim.TracerOutlineColor,
+    Title = 'Outline Color',
+    Callback = function(Value)
+        matchacc.TargetAim.TracerOutlineColor = Value
+        tracerOutline.Color = Value
+    end
+})
+
+TargetAimTab:AddDropdown('TracerPosition', {
+    Values = {'Mouse', 'Tool'},
+    Default = 1,
+    Multi = false,
+    Text = 'Tracer Position',
+    Callback = function(Value)
+        matchacc.TargetAim.TracerPosition = Value
+    end
+})
+
+TargetAimTab:AddToggle('LookAt', {
+    Text = 'Look At',
+    Default = false,
+    Callback = function(Value)
+        matchacc.TargetAim.LookAt = Value
+    end
+})
+
+TargetAimTab:AddToggle('ToggleStrafe', {
+    Text = 'Toggle Strafe',
+    Default = false,
+    Callback = function(Value)
+        matchacc.TargetAim.ToggleStrafe = Value
+    end
+}):AddKeyPicker('StrafeKey', {
+    Default = 'Z',
+    Text = 'Strafe',
+    Mode = 'Toggle',
+    Callback = function(Value)
+        if matchacc.TargetAim.ToggleStrafe then
+            matchacc.TargetAim.Strafe = Value
+            if Value then
+                Library:Notify("Strafe: ON", 2)
+            else
+                Library:Notify("Strafe: OFF", 2)
+            end
+        end
+    end
+})
+
+TargetAimTab:AddToggle('VisualizeStrafe', {
+    Text = 'Visualize Strafe',
+    Default = false,
+    Callback = function(Value)
+        matchacc.TargetAim.VisualizeStrafe = Value
+    end
+}):AddColorPicker('VisInline', {
+    Default = matchacc.TargetAim.VisualizeStrafeInlineColor,
+    Title = 'Inline Color',
+    Callback = function(Value)
+        matchacc.TargetAim.VisualizeStrafeInlineColor = Value
+        BodyCloneHighlight.FillColor = Value
+    end
+}):AddColorPicker('VisOutline', {
+    Default = matchacc.TargetAim.VisualizeStrafeOutlineColor,
+    Title = 'Outline Color',
+    Callback = function(Value)
+        matchacc.TargetAim.VisualizeStrafeOutlineColor = Value
+        BodyCloneHighlight.OutlineColor = Value
+    end
+})
+
+TargetAimTab:AddToggle('LineStrafe', {
+    Text = 'Line Strafe',
+    Default = false,
+    Callback = function(Value)
+        matchacc.TargetAim.LineStrafe = Value
+    end
+})
+
+TargetAimTab:AddDropdown('StrafeMethod', {
+    Values = {'Orbit', 'Randomize'},
+    Default = 2,
+    Multi = false,
+    Text = 'Strafe Method',
+    Callback = function(Value)
+        matchacc.TargetAim.StrafeMethod = Value
+    end
+})
+
+TargetAimTab:AddSlider('StrafePrediction', {
+    Text = 'Strafe Prediction',
+    Default = 0.1,
+    Min = 0,
+    Max = 1,
+    Rounding = 2,
+    Callback = function(Value)
+        matchacc.TargetAim.StrafePrediction = Value
+    end
+})
+
+TargetAimTab:AddToggle('AutoStomp', {
+    Text = 'Auto Stomp',
+    Default = false,
+    Callback = function(Value)
+        matchacc.TargetAim.AutoStomp = Value
+    end
+})
+
+TargetAimTab:AddToggle('VoidResolver', {
+    Text = 'Void Resolver',
+    Default = false,
+    Callback = function(Value)
+        matchacc.TargetAim.VoidResolver = Value
+    end
+})
+
+local targetAimSpectateConnection
+
+TargetAimTab:AddToggle('SpectateTarget', {
+    Text = 'Spectate Target',
+    Default = false,
+    Callback = function(Value)
+        matchacc.TargetAim.SpectateTarget = Value
+
+        if Value then
+            if matchacc.TargetAim.Target == "None" then
+                Library:Notify(
+                    "UE - please select a target before using 'Spectate Target'.",
+                    3
+                )
+                Toggles.SpectateTarget.Value = false
+                matchacc.TargetAim.SpectateTarget = false
+                return
+            end
+
+            if targetAimSpectateConnection then
+                targetAimSpectateConnection:Disconnect()
+            end
+
+            targetAimSpectateConnection = RunService.Heartbeat:Connect(function()
+                local targetName = matchacc.TargetAim.Target
+
+                -- nếu target bị clear
+                if targetName == "None" then
+                    workspace.CurrentCamera.CameraSubject =
+                        localPlayer.Character and localPlayer.Character:FindFirstChild("Humanoid")
+
+                    Toggles.SpectateTarget.Value = false
+                    matchacc.TargetAim.SpectateTarget = false
+                    return
+                end
+
+                local targetPlayer = Players:FindFirstChild(targetName)
+                if not targetPlayer then return end
+
+                local char = targetPlayer.Character
+                local hum = char and char:FindFirstChild("Humanoid")
+
+                -- có humanoid & còn sống → spectate
+                if hum and hum.Health > 0 then
+                    workspace.CurrentCamera.CameraSubject = hum
+                else
+                    -- target chết → tạm trả camera về local, CHỜ respawn
+                    workspace.CurrentCamera.CameraSubject =
+                        localPlayer.Character and localPlayer.Character:FindFirstChild("Humanoid")
+                end
+            end)
+        else
+            if targetAimSpectateConnection then
+                targetAimSpectateConnection:Disconnect()
+                targetAimSpectateConnection = nil
+            end
+
+            workspace.CurrentCamera.CameraSubject =
+                localPlayer.Character and localPlayer.Character:FindFirstChild("Humanoid")
+        end
+    end
+}):AddKeyPicker('SpectateKey', {
+    Default = 'none',
+    SyncToggleState = true,
+    Mode = 'Toggle',
+    Text = 'Spectate Target',
+    Callback = function(Value)
+        Toggles.SpectateTarget.Value = Value
+    end
+})
+--local ChatGroup = Tabs.Main:AddLeftGroupbox('lol ez')
+local PlayersGroup = Tabs.Main:AddLeftGroupbox('Players')
+
+PlayersGroup:AddDropdown('AutoKillTarget', {
+    SpecialType = 'Player',
+    ExcludeLocalPlayer = true,
+    Multi = false,
+    Text = 'Target',
+    Searchable = true,
+    Callback = function(Value)
+        matchacc.AutoKill.Target = Value
+    end
+})
+PlayersGroup:AddButton('Teleport to Target', function()
+    if not matchacc.AutoKill.Target or matchacc.AutoKill.Target == "" then
+        Library:Notify("UE - No target selected!", 3)
+        return
+    end
+
+    local targetPlayer = Players:FindFirstChild(matchacc.AutoKill.Target)
+    if not targetPlayer or not targetPlayer.Character or not targetPlayer.Character:FindFirstChild("HumanoidRootPart") then
+        Library:Notify("UE - Target not found or no character!", 3)
+        return
+    end
+
+    local hrp = localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if not hrp then
+        Library:Notify("UE - Your character not loaded!", 3)
+        return
+    end
+
+    hrp.CFrame = targetPlayer.Character.HumanoidRootPart.CFrame * CFrame.new(0, 0, -3) -- đứng sau lưng target 3 stud
+    Library:Notify("Teleported to " .. matchacc.AutoKill.Target, 2)
+end)
+PlayersGroup:AddToggle('AutoKillEnabled', {
+    Text = 'Enabled',
+    Default = false,
+    Callback = function(Value)
+        matchacc.AutoKill.Enabled = Value
+    end
+}):AddKeyPicker('AutoKillKey', {
+    Default = 'none',
+    Text = 'Auto Kill',
+    Mode = 'Toggle',
+    Callback = function(Value)
+        matchacc.AutoKill.Enabled = Value
+    end
+})
+
+local autoKillSpectateConnection
+
+PlayersGroup:AddToggle('AutoKillSpectate', {
+    Text = 'Spectate',
+    Default = false,
+    Callback = function(Value)
+        matchacc.AutoKill.Spectate = Value
+        
+        if Value then
+
+            if matchacc.AutoKill.Target == nil or matchacc.AutoKill.Target == "None" then
+                Library:Notify("UE - please select a target before using 'Spectate'.", 3)
+                Toggles.AutoKillSpectate.Value = false
+                matchacc.AutoKill.Spectate = false
+                return
+            end
+
+            -- ngắt kết nối cũ (nếu có)
+            if autoKillSpectateConnection then
+                autoKillSpectateConnection:Disconnect()
+                autoKillSpectateConnection = nil
+            end
+
+            autoKillSpectateConnection = RunService.Heartbeat:Connect(function()
+                local targetName = matchacc.AutoKill.Target
+
+                if targetName == nil or targetName == "None" then
+                    workspace.CurrentCamera.CameraSubject = localPlayer.Character and localPlayer.Character:FindFirstChild("Humanoid")
+
+                    Toggles.AutoKillSpectate.Value = false
+                    matchacc.AutoKill.Spectate = false
+                    
+                    if autoKillSpectateConnection then
+                        autoKillSpectateConnection:Disconnect()
+                        autoKillSpectateConnection = nil
+                    end
+                    return
+                end
+
+                local targetPlayer = Players:FindFirstChild(targetName)
+                if not targetPlayer then return end
+
+                local char = targetPlayer.Character
+                local hum = char and char:FindFirstChild("Humanoid")
+
+                if hum and hum.Health > 0 then
+                    workspace.CurrentCamera.CameraSubject = hum
+                else
+                    -- target chết → trả camera về local
+                    workspace.CurrentCamera.CameraSubject =
+                        localPlayer.Character and localPlayer.Character:FindFirstChild("Humanoid")
+                end
+            end)
+
+        else
+            -- tắt spectate
+            if autoKillSpectateConnection then
+                autoKillSpectateConnection:Disconnect()
+                autoKillSpectateConnection = nil
+            end
+
+            workspace.CurrentCamera.CameraSubject = 
+                localPlayer.Character and localPlayer.Character:FindFirstChild("Humanoid")
+        end
+    end
+})
+Players.PlayerAdded:Connect(function(plr)
+    if plr.Name == matchacc.AutoKill.Target and matchacc.AutoKill.Spectate then
+        plr.CharacterAdded:Wait()
+        task.wait(0.5) -- đợi character load đầy đủ
+        if matchacc.AutoKill.Spectate then
+		    local targetPlr = Players:FindFirstChild(matchacc.AutoKill.Target)
+		    if not targetPlr then return end
+		    if targetPlr.Character and targetPlr.Character:FindFirstChild("Humanoid") and targetPlr.Character.Humanoid.Health > 0 then
+		        workspace.CurrentCamera.CameraSubject = targetPlr.Character.Humanoid
+		    end
         end
     end
 end)
-
-getgenv().range = 250
-
-getgenv().whitelist = {}
-
-
-getgenv().tracer = Instance.new("Part")
-getgenv().tracer.Size = Vector3.new(0.2, 0.2, 0.2)
-getgenv().tracer.Material = Enum.Material.Neon
-getgenv().tracer.Color = Color3.new(1, 0, 0)
-getgenv().tracer.Transparency = 1
-getgenv().tracer.Anchored = true
-getgenv().tracer.CanCollide = false
-getgenv().tracer.Parent = workspace
-
-getgenv().enabled = false
-getgenv().active = false
-getgenv().visualizeEnabled = false
-getgenv().silentEnabled = false
-getgenv().lastHealth = {}
-
-KillAura:AddToggle('MainToggle', {
-    Text = 'Kill Aura',
-    Default = false,
-    Callback = function(state)
-        getgenv().enabled = state
-        if not state then
-            getgenv().active = false
-            getgenv().tracer.Transparency = 1
-        end
-    end
-}):AddKeyPicker('Keybind', {
-    Default = 'K',
-    Text = 'kill aura',
-    Mode = 'Toggle',
-    Callback = function(state)
-        if not getgenv().enabled or UserInputService:GetFocusedTextBox() then return end
-        getgenv().active = state
+PlayersGroup:AddToggle('AutoKillDesync', {
+    Text = 'Desync for autokill',
+    Default = true,
+    Callback = function(Value)
+        matchacc.AutoKill.AutoKillDesync = Value
     end
 })
 
-KillAura:AddSlider("Range", {
-    Text = "Range",
+local function getValidTargets()
+    local targets = {}
+    for _, player in pairs(players:GetPlayers()) do
+        if player ~= localPlayer then
+            if matchacc.Checks.Team and player.Team == localPlayer.Team then continue end
+            if matchacc.Checks.Forcefield and player.Character:FindFirstChild("ForceField") then continue end
+            table.insert(targets, player.Name)
+        end
+    end
+    return targets
+end
+
+local autoKillAllConnection
+PlayersGroup:AddToggle('AutoKillAllEnabled', {
+    Text = 'Auto Kill All',
+    Default = false,
+    Callback = function(Value)
+        matchacc.AutoKillAll.Enabled = Value
+        if Value then
+            matchacc.AutoKillAll.Targets = getValidTargets()
+            matchacc.AutoKillAll.CurrentTargetIndex = 1
+            if #matchacc.AutoKillAll.Targets > 0 then
+                matchacc.AutoKill.Target = matchacc.AutoKillAll.Targets[matchacc.AutoKillAll.CurrentTargetIndex]
+            end
+            autoKillAllConnection = RunService.Heartbeat:Connect(function()
+                if not matchacc.AutoKillAll.Enabled then return end
+                local currentTarget = game.Players:FindFirstChild(matchacc.AutoKill.Target)
+                if not currentTarget or not isAlive(currentTarget) then
+                    matchacc.AutoKillAll.CurrentTargetIndex = matchacc.AutoKillAll.CurrentTargetIndex + 1
+                    if matchacc.AutoKillAll.CurrentTargetIndex > #matchacc.AutoKillAll.Targets then
+                        matchacc.AutoKillAll.Targets = getValidTargets()
+                        matchacc.AutoKillAll.CurrentTargetIndex = 1
+                    end
+                    if #matchacc.AutoKillAll.Targets > 0 then
+                        matchacc.AutoKill.Target = matchacc.AutoKillAll.Targets[matchacc.AutoKillAll.CurrentTargetIndex]
+                    else
+                        matchacc.AutoKillAll.Enabled = false
+                    end
+                end
+            end)
+        else
+            if autoKillAllConnection then
+                autoKillAllConnection:Disconnect()
+                autoKillAllConnection = nil
+            end
+            matchacc.AutoKill.Target = nil
+        end
+    end
+}):AddKeyPicker('AutoKillAllKey', {
+    Default = 'none',
+    SyncToggleState = true,
+    Mode = 'Toggle',
+    Text = 'Auto Kill All',
+    Callback = function(Value)
+        Toggles.AutoKillAllEnabled.Value = Value
+    end
+})
+local HitEffectsGroup = Tabs.Main:AddLeftGroupbox('Hit Effects')
+HitEffectsGroup:AddToggle('HitChamsEnabled', {
+    Text = 'Hit Chams',
+    Default = false,
+    Callback = function(Value)
+        matchacc.HitEffects.HitChams.Enabled = Value
+    end
+}):AddColorPicker('HitChamsColor', {
+    Default = matchacc.HitEffects.HitChams.Color,
+    Title = 'Hit Chams Color',
+    Callback = function(Value)
+        matchacc.HitEffects.HitChams.Color = Value
+    end
+})
+
+HitEffectsGroup:AddSlider('HitChamsLifetime', {
+    Text = 'Hit Chams Lifetime (sec)',
+    Min = 1,
+    Max = 10,
+    Default = matchacc.HitEffects.HitChams.Lifetime,
+    Rounding = 1,
+    Callback = function(Value)
+        matchacc.HitEffects.HitChams.Lifetime = Value
+    end
+})
+
+HitEffectsGroup:AddSlider('HitChamsTransparency', {
+    Text = 'Hit Chams Transparency',
+    Min = 0,
+    Max = 1,
+    Default = matchacc.HitEffects.HitChams.Transparency,
+    Rounding = 2,
+    Callback = function(Value)
+        matchacc.HitEffects.HitChams.Transparency = Value
+    end
+})
+
+HitEffectsGroup:AddDropdown('HitChamsMaterial', {
+    Values = {'Neon', 'ForceField'},
+    Default = matchacc.HitEffects.HitChams.Material == "Neon" and 1 or 2,
+    Multi = false,
+    Text = 'Hit Chams Material',
+    Callback = function(Value)
+        matchacc.HitEffects.HitChams.Material = Value
+    end
+})
+
+local TweenService = game:GetService("TweenService")
+local RaycastParams = RaycastParams.new()
+RaycastParams.FilterType = Enum.RaycastFilterType.Blacklist
+RaycastParams.IgnoreWater = true
+
+-- Settings
+local font = Enum.Font.SourceSansBold
+local baseSize = 40
+local distance = 10000
+local animationDuration = 3 
+local fadeDuration = 1 
+local maxOffset = 20 
+
+local isDamageNumbersEnabled = false  
+local damageColor = Color3.fromRGB(255, 255, 255)
+
+-- Previous health of the nearest player
+local previousHealth = {}
+
+-- Function to check if a player is behind a wall
+local function isPlayerVisible(player)
+	if not player.Character or not player.Character:FindFirstChild("Head") then return false end
+	local head = player.Character.Head
+	local origin = Camera.CFrame.Position
+	local direction = (head.Position - origin).Unit * (head.Position - origin).Magnitude
+	RaycastParams.FilterDescendantsInstances = {Players.LocalPlayer.Character}
+	local result = workspace:Raycast(origin, direction, RaycastParams)
+	return not result or result.Instance:IsDescendantOf(player.Character)
+end
+
+-- Function to get the player nearest to the cursor with visibility check
+local function getNearestToCursor()
+	local mouseLocation = UserInputService:GetMouseLocation()
+	local nearestPlayer
+	local shortestDistance = math.huge
+
+	for _, player in ipairs(Players:GetPlayers()) do
+		if player ~= Players.LocalPlayer and player.Character and player.Character:FindFirstChild("Head") then
+			local head = player.Character.Head
+			local screenPosition, onScreen = Camera:WorldToViewportPoint(head.Position)
+			if onScreen then
+				local distanceToCursor = (Vector2.new(screenPosition.X, screenPosition.Y) - mouseLocation).Magnitude
+				if distanceToCursor < shortestDistance then
+					shortestDistance = distanceToCursor
+					nearestPlayer = player
+				end
+			end
+		end
+	end
+	return nearestPlayer
+end
+
+-- Function to create damage number display
+local function createDamageDisplay(player, damageAmount)
+	if not isDamageNumbersEnabled then return end
+
+	local head = player.Character and player.Character:FindFirstChild("Head")
+	if head then
+		local damageContainer = head:FindFirstChild("DamageContainer")
+		if not damageContainer then
+			damageContainer = Instance.new("BillboardGui")
+			damageContainer.Name = "DamageContainer"
+			damageContainer.Parent = head
+			damageContainer.Adornee = head
+			damageContainer.Size = UDim2.new(0, 100, 0, 50)
+			damageContainer.StudsOffset = Vector3.new(0, 2, 0)
+			damageContainer.AlwaysOnTop = true
+			damageContainer.MaxDistance = distance
+			damageContainer.Enabled = true
+		end
+
+		-- Create the new damage number label
+		local textLabel = Instance.new("TextLabel")
+		textLabel.Parent = damageContainer
+		textLabel.Text = tostring(damageAmount)
+		textLabel.TextColor3 = damageColor
+		textLabel.TextSize = baseSize + (damageAmount / 10) -- Scale size based on damage
+		textLabel.Font = font
+		textLabel.BackgroundTransparency = 1
+		textLabel.Size = UDim2.new(1, 0, 0, baseSize)
+		textLabel.TextStrokeTransparency = 0.4
+		textLabel.Position = UDim2.new(0.5, -50 + math.random(-maxOffset, maxOffset), 0, math.random(-maxOffset, maxOffset)) -- Random offset
+
+		-- Target position for the damage number to slowly move upwards
+		local targetPosition = UDim2.new(0.5, -50, 0, -100) -- Final position for all damage numbers
+
+		-- Create the upward movement tween
+		local moveUpTween = TweenService:Create(
+			textLabel, 
+			TweenInfo.new(animationDuration, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), 
+			{Position = targetPosition}
+		)
+
+		-- Create the fade-out tween
+		local fadeOutTween = TweenService:Create(
+			textLabel,
+			TweenInfo.new(fadeDuration, Enum.EasingStyle.Sine, Enum.EasingDirection.Out),
+			{TextTransparency = 1, TextStrokeTransparency = 1} -- Fade both text and stroke
+		)
+
+		-- Play the move-up tween
+		moveUpTween:Play()
+
+		-- Once the move-up animation is completed, start fading out
+		moveUpTween.Completed:Connect(function()
+			fadeOutTween:Play()
+
+			-- Destroy the label after the fade-out is complete
+			fadeOutTween.Completed:Connect(function()
+				textLabel:Destroy()
+			end)
+		end)
+	end
+end
+
+-- Function to check and display damage numbers for the nearest player
+local function checkNearestPlayerDamage()
+	local nearestPlayer = getNearestToCursor()
+
+	if nearestPlayer and nearestPlayer.Character and nearestPlayer.Character:FindFirstChildOfClass("Humanoid") then
+		local humanoid = nearestPlayer.Character:FindFirstChildOfClass("Humanoid")
+		local currentHealth = humanoid.Health
+
+		-- Get the previous health of the player, or set it to their current health if not tracked
+		local prevHealth = previousHealth[nearestPlayer.UserId] or currentHealth
+
+		if currentHealth < prevHealth then
+		    createDamageDisplay(nearestPlayer, math.floor(prevHealth - currentHealth))
+		end
+
+		-- Update the player's previous health
+		previousHealth[nearestPlayer.UserId] = currentHealth
+	end
+end
+
+-- Run every frame to check the nearest player's health
+RunService.RenderStepped:Connect(checkNearestPlayerDamage)
+HitEffectsGroup:AddToggle('DamageNumbersEnabled', {
+    Text = 'Damage Numbers',
+    Default = false,
+    Callback = function(Value)
+        isDamageNumbersEnabled = Value
+    end
+}):AddColorPicker('DamageColor', {
+    Default = Color3.fromRGB(255, 255, 255),
+    Title = 'Damage Color',
+    Callback = function(Value)
+        damageColor = Value
+    end
+})
+
+HitEffectsGroup:AddToggle('HitNotifications', {
+    Text = 'Hit Notifications',
+    Default = false,
+    Callback = function(Value)
+        matchacc.HitEffects.HitNotifications = Value
+    end
+})
+
+HitEffectsGroup:AddSlider('NotifyTime', {
+    Text = 'Notify Time',
+    Default = 3,
+    Min = 1,
+    Max = 10,
+    Rounding = 0,
+    Callback = function(Value)
+        matchacc.HitEffects.HitNotificationsTime = Value
+    end
+})
+
+HitEffectsGroup:AddToggle('HitSounds', {
+    Text = 'Hit Sounds',
+    Default = false,
+    Callback = function(Value)
+        matchacc.HitEffects.HitSounds = Value
+    end
+})
+
+HitEffectsGroup:AddDropdown('HitSoundSelect', {
+    Values = {"Bubble", "Lazer", "Pick", "Pop", "Rust", "Sans", "Fart", "Big", "Vine", "UwU", "Bruh", "Skeet", "Neverlose", "Fatality", "Bonk", "Minecraft", "Gamesense", "RIFK7", "Bamboo", "Crowbar", "Weeb", "Beep", "Bambi", "Stone", "Old Fatality", "Click", "Ding", "Snow", "Laser", "Mario", "Steve", "Call of Duty", "Bat", "TF2 Critical", "Saber", "Baimware", "Osu", "TF2", "Slime", "Among Us", "One"},
+    Default = "Neverlose",
+    Multi = false,
+    Text = 'Hit Sound',
+    Callback = function(Value)
+        matchacc.HitEffects.HitSoundID = hitsounds[Value]
+    end
+})
+
+HitEffectsGroup:AddSlider('HitSoundVolume', {
+    Text = 'Volume',
+    Default = 5,
+    Min = 1,
+    Max = 10,
+    Rounding = 0,
+    Callback = function(Value)
+        matchacc.HitEffects.HitSoundVolume = Value
+    end
+})
+
+ChecksTab:AddToggle('CheckWall', {
+    Text = 'Check Wall',
+    Default = false,
+    Callback = function(Value)
+        matchacc.Checks.Wall = Value
+    end
+})
+
+ChecksTab:AddToggle('CheckForcefield', {
+    Text = 'Check Forcefield',
+    Default = false,
+    Callback = function(Value)
+        matchacc.Checks.Forcefield = Value
+    end
+})
+
+ChecksTab:AddToggle('CheckAlive', {
+    Text = 'Check Alive',
+    Default = false,
+    Callback = function(Value)
+        matchacc.Checks.Alive = Value
+    end
+})
+
+ChecksTab:AddToggle('CheckTeam', {
+    Text = 'Check Team',
+    Default = false,
+    Callback = function(Value)
+        matchacc.Checks.Team = Value
+    end
+})
+ChecksTab:AddToggle('FOVCircleToggle', {
+    Text = 'FOV Circle',
+    Default = false,
+    Callback = function(Value)
+        FOVCircleEnabled = Value
+        InnerCircle.Visible = Value
+        OuterCircle.Visible = Value
+        FillCircle.Visible = Value and GradientFillEnabled
+    end
+}):AddColorPicker('FOVInnerColorPicker', {
+    Default = Color3.fromRGB(255, 255, 255),
+    Title = 'Inner Circle Color',
+    Callback = function(Value)
+        FOVInnerColor = Value
+        InnerCircle.Color = Value
+    end
+}):AddColorPicker('FOVOuterColorPicker', {
+    Default = Color3.fromRGB(0, 0, 0),
+    Title = 'Outer Circle Color',
+    Callback = function(Value)
+        FOVOuterColor = Value
+        OuterCircle.Color = Value
+    end
+})
+
+ChecksTab:AddSlider('FOVSizeSlider', {
+    Text = 'FOV Size',
+    Default = 300,
+    Min = 100,
+    Max = 1000,
+    Rounding = 0,
+    Callback = function(Value)
+        FOVCircleSize = Value
+        InnerCircle.Radius = Value
+        OuterCircle.Radius = Value
+        FillCircle.Radius = Value
+    end
+})
+
+ChecksTab:AddToggle('GradientFillToggle', {
+    Text = 'Gradient Fill FOV Circle',
+    Default = false,
+    Callback = function(Value)
+        GradientFillEnabled = Value
+        FillCircle.Visible = FOVCircleEnabled and Value
+    end
+}):AddColorPicker('GradientColor1Picker', {
+    Default = Color3.fromRGB(255, 255, 255),
+    Title = 'Gradient Color 1',
+    Callback = function(Value)
+        GradientColor1 = Value
+    end
+}):AddColorPicker('GradientColor2Picker', {
+    Default = Color3.fromRGB(0, 0, 0),
+    Title = 'Gradient Color 2',
+    Callback = function(Value)
+        GradientColor2 = Value
+    end
+})
+
+ChecksTab:AddSlider('FillTransparencySlider', {
+    Text = 'Fill Transparency',
+    Default = 0.5,
+    Min = 0,
+    Max = 1,
+    Rounding = 2,
+    Callback = function(Value)
+        FillTransparency = Value
+        FillCircle.Transparency = Value
+    end
+})
+RunService.RenderStepped:Connect(function()
+    if FOVCircleEnabled then
+        local pos
+        if UserInputService.TouchEnabled then
+            -- Mobile: tâm màn hình
+            pos = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+        else
+            -- PC: vị trí chuột
+            pos = UserInputService:GetMouseLocation()
+        end
+        InnerCircle.Position = pos
+        OuterCircle.Position = pos
+        FillCircle.Position = pos
+        
+        if GradientFillEnabled then
+            -- Simulate gradient xoay bằng lerp color theo sin wave (xoay màu giữa 2 color)
+            local t = math.sin(tick() * 2) * 0.5 + 0.5 
+            local r = GradientColor1.R + (GradientColor2.R - GradientColor1.R) * t
+            local g = GradientColor1.G + (GradientColor2.G - GradientColor1.G) * t
+            local b = GradientColor1.B + (GradientColor2.B - GradientColor1.B) * t
+            FillCircle.Color = Color3.new(r, g, b)
+        end
+    end
+end)
+OptionsTab:AddInput('PredictionInput', {
+    Default = '0.0000',
+    Numeric = true,
+    Finished = true,
+    Text = 'Prediction',
+    Tooltip = 'Manual prediction value',
+    Placeholder = '0.0000',
+    Callback = function(Value)
+        matchacc.TargetAim.Prediction = tonumber(Value) or 0
+    end
+})
+
+OptionsTab:AddToggle('AutoPredictToggle', {
+    Text = 'Auto Prediction',
+    Default = false,
+    Callback = function(Value)
+        matchacc.TargetAim.AutoPredict = Value
+    end
+})
+
+OptionsTab:AddDropdown('PredictModeDropdown', {
+    Values = {'Calculate', 'Ping Sets' },
+    Default = 0,
+    Multi = false,
+    Text = 'Prediction Mode',
+    Callback = function(Value)
+        matchacc.TargetAim.PredictMode = Value
+    end
+})
+
+OptionsTab:AddDropdown('HitPartDropdown', {
+    Values = { 'Head', 'HumanoidRootPart', 'UpperTorso', 'LowerTorso' },
+    Default = 'Head',
+    Multi = false,
+    Text = 'Hit Part',
+    Callback = function(Value)
+        matchacc.TargetAim.HitPart = Value
+    end
+})
+
+OptionsTab:AddInput('OffsetInput', {
+    Default = '0',
+    Numeric = true,
+    Finished = true,
+    Text = 'Y Offset',
+    Placeholder = '0',
+    Callback = function(Value)
+        matchacc.TargetAim.Offset = tonumber(Value) or 0
+    end
+})
+
+OptionsTab:AddInput('JumpOffsetInput', {
+    Default = '0',
+    Numeric = true,
+    Finished = true,
+    Text = 'Jump Offset',
+    Placeholder = '0',
+    Callback = function(Value)
+        matchacc.TargetAim.JumpOffset = tonumber(Value) or 0
+    end
+})
+
+OptionsTab:AddToggle('AirPartToggle', {
+    Text = 'Airshot Part',
+    Default = false,
+    Callback = function(Value)
+        matchacc.TargetAim.AirPartEnabled = Value
+    end
+})
+
+OptionsTab:AddDropdown('AirPartDropdown', {
+    Values = { 'Head', 'HumanoidRootPart', 'UpperTorso', 'LowerTorso' },
+    Default = 'Head',
+    Multi = false,
+    Text = 'Airshot Part',
+    Callback = function(Value)
+        matchacc.TargetAim.AirPart = Value
+    end
+})
+
+OptionsTab:AddToggle('ResolverToggle', {
+    Text = 'Resolver',
+    Default = false,
+    Callback = function(Value)
+        matchacc.TargetAim.Resolver = Value
+    end
+})
+local KillAuraGroup = Tabs.Main:AddRightGroupbox('Kill Aura')
+
+KillAuraGroup:AddToggle('KillAuraEnabled', {
+    Text = 'Enabled',
+    Default = false,
+    Callback = function(Value)
+        matchacc.KillAura.Enabled = Value
+        if not Value then
+            matchacc.KillAura.Active = false
+            ka_tracer.Transparency = 1
+        end
+    end
+}):AddKeyPicker('KillAuraKey', {
+    Default = 'K',
+    Text = 'Kill Aura',
+    Mode = 'Toggle',
+    Callback = function(Value)
+        if matchacc.KillAura.Enabled then
+            matchacc.KillAura.Active = Value
+        end
+    end
+})
+
+KillAuraGroup:AddSlider('KillAuraRange', {
+    Text = 'Range',
     Default = 250,
     Min = 10,
     Max = 250,
-    Rounding = 1,
-    Callback = function(value)
-        getgenv().range = value
+    Rounding = 0,
+    Callback = function(Value)
+        matchacc.KillAura.Range = Value
     end
 })
 
-KillAura:AddToggle('Visualizer', {
-    Text = 'Visualize',
-    Default = false,
-    Callback = function(state)
-        getgenv().visualizeEnabled = state
-    end
-}):AddColorPicker('VisualizerColor', {
-    Text = 'Visualizer Color',
-    Default = Color3.new(1, 0, 0),
-    Callback = function(value)
-        getgenv().tracer.Color = value
-    end
-})
-
-KillAura:AddToggle('Silent', {
+KillAuraGroup:AddToggle('KillAuraSilent', {
     Text = 'Silent',
     Default = false,
-    Callback = function(state)
-        getgenv().silentEnabled = state
+    Callback = function(Value)
+        matchacc.KillAura.Silent = Value
     end
 })
 
-KillAura:AddInput('wlb', {
-    Default = '',
-    Numeric = false,
-    Finished = false,
-    Text = 'Add/Remove Player',
-    Tooltip = 'Type a name or display name to add/remove from whitelist',
-    Placeholder = 'Player Name',
-    Callback = function(input)
-        for _, player in pairs(game.Players:GetPlayers()) do
-            if player.Name == input or player.DisplayName == input then
-                if getgenv().whitelist[player.Name] then
-                    getgenv().whitelist[player.Name] = nil
-                    Library:Notify(player.Name .. " removed from whitelist.", 2)
-                else
-                    getgenv().whitelist[player.Name] = true
-                    Library:Notify(player.Name .. " added to whitelist.", 2)
-                end
-                return
-            end
-        end
-        Library:Notify("Player not found.", 2)
-    end,
-    Autocomplete = function(input)
-        local suggestions = {}
-        for _, player in pairs(game.Players:GetPlayers()) do
-            if string.find(string.lower(player.Name), string.lower(input)) or string.find(string.lower(player.DisplayName), string.lower(input)) then
-                table.insert(suggestions, player.Name .. " (" .. player.DisplayName .. ")")
-            end
-        end
-        return suggestions
+KillAuraGroup:AddToggle('KillAuraVisualize', {
+    Text = 'Visualize',
+    Default = false,
+    Callback = function(Value)
+        matchacc.KillAura.Visualize = Value
+    end
+}):AddColorPicker('KAVisColor', {
+    Default = Color3.new(1, 1, 1),
+    Title = 'Visualizer Color',
+    Callback = function(Value)
+        ka_tracer.Color = Value
     end
 })
 
-
-
-task.spawn(function()
-    while true do
-        if getgenv().active and getgenv().enabled and game.Players.LocalPlayer.Character and game.Players.LocalPlayer.Character:FindFirstChild("HumanoidRootPart") and game.Players.LocalPlayer.Character:FindFirstChildOfClass("Tool") and game.Players.LocalPlayer.Character:FindFirstChildOfClass("Tool"):FindFirstChild("Handle") then
-            if workspace:FindFirstChild("Players") and workspace.Players:FindFirstChild(game.Players.LocalPlayer.Name) and workspace.Players:FindFirstChild(game.Players.LocalPlayer.Name):FindFirstChild("BodyEffects") and workspace.Players:FindFirstChild(game.Players.LocalPlayer.Name).BodyEffects:FindFirstChild("K.O") and workspace.Players:FindFirstChild(game.Players.LocalPlayer.Name).BodyEffects["K.O"].Value then
-                task.wait()
-            else
-                local closest = math.huge
-                target = nil
-
-                for _, player in pairs(game.Players:GetPlayers()) do
-                    if player ~= game.Players.LocalPlayer and not getgenv().whitelist[player.Name] and player.Character and player.Character:FindFirstChild("Head") and not player.Character:FindFirstChild("GRABBING_CONSTRAINT") then
-                        if workspace:FindFirstChild("Players") and workspace.Players:FindFirstChild(player.Name) and workspace.Players:FindFirstChild(player.Name):FindFirstChild("BodyEffects") and workspace.Players:FindFirstChild(player.Name).BodyEffects:FindFirstChild("K.O") and not workspace.Players:FindFirstChild(player.Name).BodyEffects["K.O"].Value then
-                            local dist = (game.Players.LocalPlayer.Character.HumanoidRootPart.Position - player.Character.Head.Position).Magnitude
-                            if dist < closest and dist <= getgenv().range then
-                                closest = dist
-                                target = player
-                            end
-                        end
-                    end
-                end
-
-                if target and target.Character and target.Character:FindFirstChild("Head") then
-                    if getgenv().visualizeEnabled then
-                        getgenv().tracer.Transparency = 0
-                        getgenv().tracer.Size = Vector3.new(0.2, 0.2, (game.Players.LocalPlayer.Character.HumanoidRootPart.Position - target.Character.Head.Position).Magnitude)
-                        getgenv().tracer.CFrame = CFrame.lookAt(game.Players.LocalPlayer.Character.HumanoidRootPart.Position, target.Character.Head.Position) * CFrame.new(0, 0, -getgenv().tracer.Size.Z / 2)
-                    else
-                        getgenv().tracer.Transparency = 1
-                    end
-
-                    local humanoid = target.Character:FindFirstChild("Humanoid")
-                    if humanoid then
-                        if not getgenv().lastHealth[target.Name] then
-                            getgenv().lastHealth[target.Name] = humanoid.Health
-                        end
-                        if humanoid.Health < getgenv().lastHealth[target.Name] then
-                            playHitsound()
-                        end
-                        getgenv().lastHealth[target.Name] = humanoid.Health
-                    end
-
-                    if getgenv().silentEnabled then
-                        game.ReplicatedStorage.MainEvent:FireServer(
-                            "ShootGun",
-                            game.Players.LocalPlayer.Character:FindFirstChildOfClass("Tool"):FindFirstChild("Handle"),
-                            game.Players.LocalPlayer.Character:FindFirstChildOfClass("Tool"):FindFirstChild("Handle").CFrame.Position - Vector3.new(0, 12, 0),
-                            target.Character.Head.Position - Vector3.new(0, 12, 0),
-                            target.Character.Head,
-                            Vector3.new(0, 0, -1)
-                    )
-                    else
-                        game.ReplicatedStorage.MainEvent:FireServer("ShootGun", game.Players.LocalPlayer.Character:FindFirstChildOfClass("Tool"):FindFirstChild("Handle"), game.Players.LocalPlayer.Character:FindFirstChildOfClass("Tool"):FindFirstChild("Handle").CFrame.Position, target.Character.Head.Position, target.Character.Head, Vector3.new(0, 0, -1))
-                    end
-                else
-                    getgenv().tracer.Transparency = 1
-                end
-            end
-        else
-            getgenv().tracer.Transparency = 1
-        end
-        task.wait()
+KillAuraGroup:AddDropdown('KAWhitelist', {
+    SpecialType = 'Player',
+    ExcludeLocalPlayer = true,
+    Multi = true,
+    Searchable = true,
+    Text = 'Whitelist',
+    Callback = function(Value)
+        matchacc.KillAura.Whitelist = Value
     end
-end)
+})
 
--- Configuration
-getgenv().espEnabled = false
-getgenv().espColor = Color3.new(1, 1, 1)
-getgenv().nameESPEnabled = false
-getgenv().nameColor = Color3.new(1, 1, 1) -- New: Name ESP color
-getgenv().nameDisplayMode = "Username"
-getgenv().nameTextSize = 14
-getgenv().studsESPEnabled = false
-getgenv().distanceColor = Color3.new(1, 1, 1)
-getgenv().distanceTextSize = 14
-getgenv().healthBarESP = false
-getgenv().healthBarColor = Color3.new(0, 1, 0) -- New: Health bar color
-getgenv().weaponESPEnabled = false
-getgenv().weaponColor = Color3.new(1, 1, 1) -- New: Weapon ESP color
-getgenv().armorBarESP = false
-getgenv().armorBarColor = Color3.new(0, 0, 1) -- New: Armor bar color
-getgenv().outlineEnabled = false
-getgenv().penisESPEnabled = false
-getgenv().penisColor = Color3.new(1, 0, 0) -- New: Penis ESP color
-
--- Font mapping
-local fontMap = {
-    ["SourceSans"] = 0
+KillAuraGroup:AddToggle('StompAura', {
+    Text = 'Stomp Aura',
+    Default = false,
+    Callback = function(Value)
+        matchacc.KillAura.StompAura = Value
+    end
+})
+local GunModsGroup = Tabs.Main:AddRightGroupbox('Gun Mods')
+matchacc.EquipAllGuns = {
+    Enabled = false,
 }
 
--- ESP Objects storage
-local ESPObjects = {}
+-- Globals (sau các global vars khác)
+local EquipAllConnection = nil
+local lastEquipTime = 0
+local EquipAllConnection
+local EquipAddedConnection
 
--- Get the game's camera
-local Camera = workspace.CurrentCamera
-
--- Function to destroy ESP for a player
-local function DestroyESP(player)
-    if ESPObjects[player] then
-        for _, obj in pairs(ESPObjects[player]) do
-            obj:Remove()
-        end
-        ESPObjects[player] = nil
-    end
-end
-
--- Function to create ESP for a player
-local function CreateESP(player)
-    DestroyESP(player)
-
-    local box = Drawing.new("Square")
-    box.Thickness = 1
-    box.Filled = false
-    box.Color = getgenv().espColor
-    box.Visible = false
-    box.ZIndex = 1
-
-    local boxOutline = Drawing.new("Square")
-    boxOutline.Thickness = 3
-    boxOutline.Filled = false
-    boxOutline.Color = Color3.new(0, 0, 0)
-    boxOutline.Visible = false
-    boxOutline.ZIndex = 0
-
-    local username = Drawing.new("Text")
-    username.Size = getgenv().nameTextSize
-    username.Center = true
-    username.Color = getgenv().nameColor
-    username.Visible = false
-    username.Font = fontMap["SourceSans"]
-    username.Outline = getgenv().outlineEnabled
-    username.OutlineColor = Color3.new(0, 0, 0)
-
-    local distance = Drawing.new("Text")
-    distance.Size = getgenv().distanceTextSize
-    distance.Center = true
-    distance.Color = getgenv().distanceColor
-    distance.Visible = false
-    distance.Font = fontMap["SourceSans"]
-    distance.Outline = getgenv().outlineEnabled
-    distance.OutlineColor = Color3.new(0, 0, 0)
-
-    local healthBar = Drawing.new("Square")
-    healthBar.Thickness = 1
-    healthBar.Filled = true
-    healthBar.Color = getgenv().healthBarColor
-    healthBar.Visible = false
-    healthBar.ZIndex = 1
-
-    local healthBarOutline = Drawing.new("Square")
-    healthBarOutline.Thickness = 3
-    healthBarOutline.Filled = false
-    healthBarOutline.Color = Color3.new(0, 0, 0)
-    healthBarOutline.Visible = false
-    healthBarOutline.ZIndex = 0
-
-    local weapon = Drawing.new("Text")
-    weapon.Size = getgenv().nameTextSize
-    weapon.Center = true
-    weapon.Color = getgenv().weaponColor
-    weapon.Visible = false
-    weapon.Font = fontMap["SourceSans"]
-    weapon.Outline = getgenv().outlineEnabled
-    weapon.OutlineColor = Color3.new(0, 0, 0)
-
-    local armorBar = Drawing.new("Square")
-    armorBar.Thickness = 1
-    armorBar.Filled = true
-    armorBar.Color = getgenv().armorBarColor
-    armorBar.Visible = false
-    armorBar.ZIndex = 1
-
-    local armorBarOutline = Drawing.new("Square")
-    armorBarOutline.Thickness = 3
-    armorBarOutline.Filled = false
-    armorBarOutline.Color = Color3.new(0, 0, 0)
-    armorBarOutline.Visible = false
-    armorBarOutline.ZIndex = 0
-
-    local penisLine = Drawing.new("Line")
-    penisLine.Thickness = 2
-    penisLine.Color = getgenv().penisColor
-    penisLine.Visible = false
-    penisLine.ZIndex = 1
-
-    ESPObjects[player] = {
-        Box = box,
-        BoxOutline = boxOutline,
-        Username = username,
-        Distance = distance,
-        HealthBar = healthBar,
-        HealthBarOutline = healthBarOutline,
-        Weapon = weapon,
-        ArmorBar = armorBar,
-        ArmorBarOutline = armorBarOutline,
-        PenisLine = penisLine
-    }
-end
-
--- Function to update ESP
-local function UpdateESP()
-    for player, objects in pairs(ESPObjects) do
-        local character = player.Character
-        if character and character:FindFirstChild("HumanoidRootPart") and player ~= LocalPlayer and getgenv().espEnabled then
-            local rootPart = character.HumanoidRootPart
-            local humanoid = character:FindFirstChildOfClass("Humanoid")
-
-            if humanoid and humanoid.Health > 0 then
-                local rootPosition, onScreen = Camera:WorldToViewportPoint(rootPart.Position)
-                local headPosition = Camera:WorldToViewportPoint(rootPart.Position + Vector3.new(0, 3, 0))
-                local footPosition = Camera:WorldToViewportPoint(rootPart.Position - Vector3.new(0, 3, 0))
-
-                if onScreen then
-                    local boxHeight = math.abs(headPosition.Y - footPosition.Y)
-                    local boxWidth = boxHeight / 2
-
-                    -- Box ESP
-                    objects.Box.Position = Vector2.new(rootPosition.X - boxWidth / 2, headPosition.Y)
-                    objects.Box.Size = Vector2.new(boxWidth, boxHeight)
-                    objects.Box.Color = getgenv().espColor
-                    objects.Box.Visible = true
-
-                    -- Box Outline
-                    objects.BoxOutline.Position = Vector2.new(rootPosition.X - boxWidth / 2, headPosition.Y)
-                    objects.BoxOutline.Size = Vector2.new(boxWidth, boxHeight)
-                    objects.BoxOutline.Visible = getgenv().outlineEnabled
-
-                    -- Name ESP (Above the box)
-                    if getgenv().nameESPEnabled then
-                        local displayName
-                        if getgenv().nameDisplayMode == "Username" then
-                            displayName = player.Name
-                        elseif getgenv().nameDisplayMode == "DisplayName" then
-                            displayName = player.DisplayName
-                        elseif getgenv().nameDisplayMode == "Username (DisplayName)" then
-                            displayName = player.Name .. " (" .. player.DisplayName .. ")"
-                        elseif getgenv().nameDisplayMode == "Username (DisplayName) [UserID]" then
-                            displayName = player.Name .. " (" .. player.DisplayName .. ") [" .. player.UserId .. "]"
-                        end
-
-                        objects.Username.Position = Vector2.new(rootPosition.X, headPosition.Y - 15) -- Adjusted position
-                        objects.Username.Text = displayName
-                        objects.Username.Size = getgenv().nameTextSize
-                        objects.Username.Font = fontMap["SourceSans"]
-                        objects.Username.Visible = true
-                        objects.Username.Color = getgenv().nameColor
-                        objects.Username.Outline = getgenv().outlineEnabled
-                    else
-                        objects.Username.Visible = false
-                    end
-
-                    -- Distance ESP (Below the box)
-                    if getgenv().studsESPEnabled then
-                        local distanceText = math.floor((LocalPlayer.Character.HumanoidRootPart.Position - rootPart.Position).Magnitude) .. " studs"
-                        objects.Distance.Position = Vector2.new(rootPosition.X, footPosition.Y + 5)
-                        objects.Distance.Text = distanceText
-                        objects.Distance.Size = getgenv().distanceTextSize
-                        objects.Distance.Font = fontMap["SourceSans"]
-                        objects.Distance.Visible = true
-                        objects.Distance.Color = getgenv().distanceColor
-                        objects.Distance.Outline = getgenv().outlineEnabled
-                    else
-                        objects.Distance.Visible = false
-                    end
-
-                    -- Health Bar ESP
-                    if getgenv().healthBarESP then
-                        local healthRatio = humanoid.Health / humanoid.MaxHealth
-                        local barHeight = boxHeight * healthRatio
-                        objects.HealthBar.Position = Vector2.new(rootPosition.X - boxWidth / 2 - 6, headPosition.Y + (boxHeight - barHeight))
-                        objects.HealthBar.Size = Vector2.new(3, barHeight)
-                        objects.HealthBar.Color = getgenv().healthBarColor
-                        objects.HealthBar.Visible = true
-
-                        -- Health Bar Outline
-                        objects.HealthBarOutline.Position = Vector2.new(rootPosition.X - boxWidth / 2 - 6, headPosition.Y + (boxHeight - barHeight))
-                        objects.HealthBarOutline.Size = Vector2.new(3, barHeight)
-                        objects.HealthBarOutline.Visible = getgenv().outlineEnabled
-                    else
-                        objects.HealthBar.Visible = false
-                        objects.HealthBarOutline.Visible = false
-                    end
-
-                    -- Weapon ESP
-                    if getgenv().weaponESPEnabled then
-                        local tool = character:FindFirstChildOfClass("Tool")
-                        if tool then
-                            objects.Weapon.Position = Vector2.new(rootPosition.X, footPosition.Y + 20)
-                            objects.Weapon.Text = "" .. tool.Name .. ""
-                            objects.Weapon.Size = getgenv().nameTextSize
-                            objects.Weapon.Font = fontMap["SourceSans"]
-                            objects.Weapon.Visible = true
-                            objects.Weapon.Color = getgenv().weaponColor
-                            objects.Weapon.Outline = getgenv().outlineEnabled
-                        else
-                            objects.Weapon.Visible = false
-                        end
-                    else
-                        objects.Weapon.Visible = false
-                    end
-
-                    -- Armor Bar ESP
-                    if getgenv().armorBarESP then
-                        local dataFolder = player:FindFirstChild("DataFolder")
-                        if dataFolder then
-                            local information = dataFolder:FindFirstChild("Information")
-                            if information then
-                                local armorSave = information:FindFirstChild("ArmorSave")
-                                if armorSave then
-                                    local armorRatio = armorSave.Value / 130 -- Assuming max armor is 100
-                                    local armorHeight = boxHeight * armorRatio
-                                    objects.ArmorBar.Position = Vector2.new(rootPosition.X + boxWidth / 2 + 3, headPosition.Y + (boxHeight - armorHeight))
-                                    objects.ArmorBar.Size = Vector2.new(3, armorHeight)
-                                    objects.ArmorBar.Color = getgenv().armorBarColor
-                                    objects.ArmorBar.Visible = true
-
-                                    -- Armor Bar Outline
-                                    objects.ArmorBarOutline.Position = Vector2.new(rootPosition.X + boxWidth / 2 + 3, headPosition.Y + (boxHeight - armorHeight))
-                                    objects.ArmorBarOutline.Size = Vector2.new(3, armorHeight)
-                                    objects.ArmorBarOutline.Visible = getgenv().outlineEnabled
-                                else
-                                    objects.ArmorBar.Visible = false
-                                    objects.ArmorBarOutline.Visible = false
-                                end
-                            else
-                                objects.ArmorBar.Visible = false
-                                objects.ArmorBarOutline.Visible = false
-                            end
-                        else
-                            objects.ArmorBar.Visible = false
-                            objects.ArmorBarOutline.Visible = false
-                        end
-                    else
-                        objects.ArmorBar.Visible = false
-                        objects.ArmorBarOutline.Visible = false
-                    end
-
-                    -- Penis ESP
-                    if getgenv().penisESPEnabled then
-                        local pelvis = character:FindFirstChild("LowerTorso") or character:FindFirstChild("Torso")
-                        if pelvis then
-                            local pelvisPosition = Camera:WorldToViewportPoint(pelvis.Position)
-                            local lookVector = rootPart.CFrame.LookVector
-                            local penisEndPosition = Camera:WorldToViewportPoint(pelvis.Position + lookVector * 2) -- Adjust length as needed
-
-                            objects.PenisLine.From = Vector2.new(pelvisPosition.X, pelvisPosition.Y)
-                            objects.PenisLine.To = Vector2.new(penisEndPosition.X, penisEndPosition.Y)
-                            objects.PenisLine.Color = getgenv().penisColor
-                            objects.PenisLine.Visible = true
-                        else
-                            objects.PenisLine.Visible = false
-                        end
-                    else
-                        objects.PenisLine.Visible = false
-                    end
-                else
-                    -- Hide all ESP elements if off-screen
-                    objects.Box.Visible = false
-                    objects.BoxOutline.Visible = false
-                    objects.Username.Visible = false
-                    objects.Distance.Visible = false
-                    objects.HealthBar.Visible = false
-                    objects.HealthBarOutline.Visible = false
-                    objects.Weapon.Visible = false
-                    objects.ArmorBar.Visible = false
-                    objects.ArmorBarOutline.Visible = false
-                    objects.PenisLine.Visible = false
-                end
-            end
+-- Function equipAllGuns đã sửa
+local function equipAllGuns()
+    local char = localPlayer.Character
+    local backpack = localPlayer.Backpack
+    if not char or not backpack then return end
+    for _, tool in ipairs(backpack:GetChildren()) do
+        if tool:IsA("Tool") and tool:FindFirstChild("Ammo") then
+            tool.Parent = char
         end
     end
 end
 
--- Function to apply ESP settings
-function applyESP()
-    for _, objects in pairs(ESPObjects) do
-        objects.Box.Visible = getgenv().espEnabled
-        objects.BoxOutline.Visible = getgenv().outlineEnabled and getgenv().espEnabled
-    end
-end
-
--- Player Added/Removed Events
-Players.PlayerAdded:Connect(function(player)
-    player.CharacterAdded:Connect(function()
-        wait(1)
-        CreateESP(player)
-    end)
-end)
-
-Players.PlayerRemoving:Connect(DestroyESP)
-
--- Initialize ESP for existing players
-for _, player in pairs(Players:GetPlayers()) do
-    if player ~= LocalPlayer then
-        CreateESP(player)
-    end
-end
-
--- Update ESP on every frame
-RunService.RenderStepped:Connect(UpdateESP)
-
--- UI for ESP Settings
-local espUI = Tabs.Visuals:AddLeftGroupbox('ESP')
-
-espUI:AddToggle("ESPEnabled", {
-    Text = "Enable",
-    Default = false,
-    Callback = function(value)
-        getgenv().espEnabled = value
-        applyESP()
-    end
-}):AddColorPicker("ESPColor", {
-    Text = "ESP Color",
-    Default = getgenv().espColor,
-    Callback = function(value)
-        getgenv().espColor = value
-        applyESP()
-    end
-})
-
-espUI:AddToggle("name", {
-    Text = "Names",
-    Default = false,
-    Callback = function(value)
-        getgenv().nameESPEnabled = value
-        applyESP()
-    end
-}):AddColorPicker("NameColor", {
-    Text = "Name Color",
-    Default = getgenv().nameColor,
-    Callback = function(value)
-        getgenv().nameColor = value
-        applyESP()
-    end
-})
-
-espUI:AddDropdown("NameDisplayMode", {
-    Text = "Name Mode",
-    Values = {"Username", "DisplayName", "Username (DisplayName)", "Username (DisplayName) [UserID]"},
-    Default = "Username",
-    Callback = function(value)
-        getgenv().nameDisplayMode = value
-        applyESP()
-    end
-})
-
-espUI:AddToggle("HealthBarESP", {
-    Text = "Health Bar",
-    Default = false,
-    Callback = function(value)
-        getgenv().healthBarESP = value
-        applyESP()
-    end
-}):AddColorPicker("HealthBarColor", {
-    Text = "Health Bar Color",
-    Default = getgenv().healthBarColor,
-    Callback = function(value)
-        getgenv().healthBarColor = value
-        applyESP()
-    end
-})
-
-espUI:AddToggle("StudsESPEnabled", {
-    Text = "Distance",
-    Default = false,
-    Callback = function(value)
-        getgenv().studsESPEnabled = value
-        applyESP()
-    end
-}):AddColorPicker("DistanceColor", {
-    Text = "Distance Color",
-    Default = getgenv().distanceColor,
-    Callback = function(value)
-        getgenv().distanceColor = value
-        applyESP()
-    end
-})
-
-espUI:AddToggle("WeaponESPEnabled", {
-    Text = "Weapon ESP",
-    Default = false,
-    Callback = function(value)
-        getgenv().weaponESPEnabled = value
-        applyESP()
-    end
-}):AddColorPicker("WeaponColor", {
-    Text = "Weapon Color",
-    Default = getgenv().weaponColor,
-    Callback = function(value)
-        getgenv().weaponColor = value
-        applyESP()
-    end
-})
-
-espUI:AddToggle("ArmorBarESP", {
-    Text = "Armor Bar",
-    Default = false,
-    Callback = function(value)
-        getgenv().armorBarESP = value
-        applyESP()
-    end
-}):AddColorPicker("ArmorBarColor", {
-    Text = "Armor Bar Color",
-    Default = getgenv().armorBarColor,
-    Callback = function(value)
-        getgenv().armorBarColor = value
-        applyESP()
-    end
-})
-
-espUI:AddToggle("OutlineEnabled", {
-    Text = "Outline",
-    Default = false,
-    Callback = function(value)
-        getgenv().outlineEnabled = value
-        applyESP()
-    end
-})
-
-espUI:AddToggle("PenisESPEnabled", {
-    Text = "Penis ESP",
-    Default = false,
-    Callback = function(value)
-        getgenv().penisESPEnabled = value
-        applyESP()
-    end
-}):AddColorPicker("PenisColor", {
-    Text = "Penis Color",
-    Default = getgenv().penisColor,
-    Callback = function(value)
-        getgenv().penisColor = value
-        applyESP()
-    end
-})
-
-local HudUi = Tabs.Visuals:AddLeftGroupbox('Hud Changer')
-
-local defaultTextHP = " Health "
-local defaultTextArmor = "                   Armor"
-local defaultTextEnergy = "Dark Energy              "
-
-local defaultColorHP = Color3.new(0.941176, 0.031373, 0.819608)
-local defaultColorArmor = Color3.new(0.376471, 0.031373, 0.933333)
-local defaultColorEnergy = Color3.new(0.768627, 0.039216, 0.952941)
-
-local textHP, textArmor, textEnergy = defaultTextHP, defaultTextArmor, defaultTextEnergy
-local colorHP, colorArmor, colorEnergy = defaultColorHP, defaultColorArmor, defaultColorEnergy
-
-local toggleHP, toggleArmor, toggleEnergy = false, false, false
-
-local function skibiditoilet()
-    local player = game.Players.LocalPlayer
-    local playerGui = player:WaitForChild("PlayerGui")
-    local gui = playerGui:WaitForChild("MainScreenGui").Bar
-
-    if toggleHP then
-        gui.HP.TextLabel.Text = textHP
-        gui.HP.bar.BackgroundColor3 = colorHP
-    end
-
-    if toggleArmor then
-        gui.Armor.TextLabel.Text = textArmor
-        gui.Armor.bar.BackgroundColor3 = colorArmor
-    end
-
-    if toggleEnergy then
-        gui.Energy.TextLabel.Text = textEnergy
-        gui.Energy.bar.BackgroundColor3 = colorEnergy
-    end
-end
-
-HudUi:AddToggle('ToggleHP', {
-    Text = 'Customize Health',
-    Default = false,
-    Callback = function(state)
-        toggleHP = state
-        skibiditoilet()
-    end
-}):AddColorPicker('ColorHP', {
-    Text = 'Health Color',
-    Default = defaultColorHP,
-    Callback = function(value)
-        if toggleHP then colorHP = value skibiditoilet() end
-    end
-})
-
-HudUi:AddInput('TextHP', {
-    Text = 'Health Text',
-    Default = defaultTextHP,
-    Callback = function(value)
-        if toggleHP then textHP = value skibiditoilet() end
-    end
-})
-
-HudUi:AddToggle('ToggleArmor', {
-    Text = 'Customize Armor',
-    Default = false,
-    Callback = function(state)
-        toggleArmor = state
-        skibiditoilet()
-    end
-}):AddColorPicker('ColorArmor', {
-    Text = 'Armor Color',
-    Default = defaultColorArmor,
-    Callback = function(value)
-        if toggleArmor then colorArmor = value skibiditoilet() end
-    end
-})
-
-HudUi:AddInput('TextArmor', {
-    Text = 'Armor Text',
-    Default = defaultTextArmor,
-    Callback = function(value)
-        if toggleArmor then textArmor = value skibiditoilet() end
-    end
-})
-
-HudUi:AddToggle('ToggleEnergy', {
-    Text = 'Customize Energy',
-    Default = false,
-    Callback = function(state)
-        toggleEnergy = state
-        skibiditoilet()
-    end
-}):AddColorPicker('ColorEnergy', {
-    Text = 'Energy Color',
-    Default = defaultColorEnergy,
-    Callback = function(value)
-        if toggleEnergy then colorEnergy = value skibiditoilet() end
-    end
-})
-
-HudUi:AddInput('TextEnergy', {
-    Text = 'Energy Text',
-    Default = defaultTextEnergy,
-    Callback = function(value)
-        if toggleEnergy then textEnergy = value skibiditoilet() end
-    end
-})
-
-local player = game.Players.LocalPlayer
-
-player.CharacterAdded:Connect(function()
-    if toggleHP or toggleArmor or toggleEnergy then
-        player:WaitForChild("PlayerGui")
-        skibiditoilet()
-    end
-end)
-
-
-local Players = game:GetService("Players")
-local player = Players.LocalPlayer
-
-local Auras = Tabs.Visuals:AddRightGroupbox("Self")
-utility = utility or {}
-
-local Settings = {
-    Visuals = {
-        SelfESP = {
-            Trail = {
-                Color = Color3.fromRGB(255, 110, 0),
-                Color2 = Color3.fromRGB(255, 0, 0), -- Second color for gradient
-                LifeTime = 1.6,
-                Width = 0.1
-            },
-            Aura = {
-                Color = Color3.fromRGB(152, 0, 252)
-            }
-        }
-    }
-}
-
-utility.trail_character = function(Bool)
-    local character = player.Character or player.CharacterAdded:Wait()
-    local humanoidRootPart = character:WaitForChild("HumanoidRootPart")
-
-    if Bool then
-        if not humanoidRootPart:FindFirstChild("BlaBla") then
-            local BlaBla = Instance.new("Trail", humanoidRootPart)
-            BlaBla.Name = "BlaBla"
-            humanoidRootPart.Material = Enum.Material.Neon
-
-            local attachment0 = Instance.new("Attachment", humanoidRootPart)
-            attachment0.Position = Vector3.new(0, 1, 0)
-
-            local attachment1 = Instance.new("Attachment", humanoidRootPart)
-            attachment1.Position = Vector3.new(0, -1, 0)
-
-            BlaBla.Attachment0 = attachment0
-            BlaBla.Attachment1 = attachment1
-            BlaBla.Color = ColorSequence.new(Settings.Visuals.SelfESP.Trail.Color, Settings.Visuals.SelfESP.Trail.Color2) -- Gradient effect
-            BlaBla.Lifetime = Settings.Visuals.SelfESP.Trail.LifeTime
-            BlaBla.Transparency = NumberSequence.new(0, 0)
-            BlaBla.LightEmission = 0.2
-            BlaBla.Brightness = 10
-            BlaBla.WidthScale = NumberSequence.new{
-                NumberSequenceKeypoint.new(0, Settings.Visuals.SelfESP.Trail.Width),
-                NumberSequenceKeypoint.new(1, 0)
-            }
-        end
-    else
-        for _, child in ipairs(humanoidRootPart:GetChildren()) do
-            if child:IsA("Trail") and child.Name == 'BlaBla' then
-                child:Destroy()
-            end
-        end
-    end
-end
-
-local function onCharacterAdded(character)
-    if getgenv().trailEnabled then
-        utility.trail_character(true)
-    end
-end
-
-player.CharacterAdded:Connect(onCharacterAdded)
-if player.Character then onCharacterAdded(player.Character) end
-
-Auras:AddToggle("TrailToggle", {
-    Text = "Trail",
-    Default = false,
-    Callback = function(state)
-        getgenv().trailEnabled = state
-        utility.trail_character(state)
-    end
-}):AddColorPicker("TrailColor", {
-    Text = "Trail Color",
-    Default = Settings.Visuals.SelfESP.Trail.Color,
-    Callback = function(color)
-        Settings.Visuals.SelfESP.Trail.Color = color
-        if getgenv().trailEnabled then
-            utility.trail_character(false)
-            utility.trail_character(true)
-        end
-    end
-}):AddColorPicker("TrailColor2", {
-    Text = "Trail Color 2",
-    Default = Settings.Visuals.SelfESP.Trail.Color2,
-    Callback = function(color)
-        Settings.Visuals.SelfESP.Trail.Color2 = color
-        if getgenv().trailEnabled then
-            utility.trail_character(false)
-            utility.trail_character(true)
-        end
-    end
-})
-
-Auras:AddSlider("TrailLifetime", {
-    Text = "Trail Lifetime",
-    Default = 1.6,
-    Min = 0.1,
-    Max = 5,
-    Rounding = 1,
-    Callback = function(value)
-        Settings.Visuals.SelfESP.Trail.LifeTime = value
-        if getgenv().trailEnabled then
-            utility.trail_character(false)
-            utility.trail_character(true)
-        end
-    end
-})
-
-local HitEffectModule = {
-    Locals = {
-        HitEffect = {
-            Type = {}
-        }
-    }
-}
-
-local Attachment = Instance.new("Attachment")
-HitEffectModule.Locals.HitEffect.Type["Skibidi RedRizz"] = Attachment
-local swirl = Instance.new("ParticleEmitter", Attachment)
-swirl.Name = "swirl"
-swirl.Lifetime = NumberRange.new(2)
-swirl.SpreadAngle = Vector2.new(-360, 360)
-swirl.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(0.5, 0.5), NumberSequenceKeypoint.new(1, 1)})
-swirl.LightEmission = 10
-swirl.Color = ColorSequence.new(Settings.Visuals.SelfESP.Aura.Color)
-swirl.VelocitySpread = -360
-swirl.Squash = NumberSequence.new(0)
-swirl.Speed = NumberRange.new(0.01)
-swirl.Size = NumberSequence.new(7)
-swirl.ZOffset = -1
-swirl.ShapeInOut = Enum.ParticleEmitterShapeInOut.InAndOut
-swirl.Rate = 40
-swirl.LockedToPart = true
-swirl.Texture = "rbxassetid://10558425570"
-swirl.RotSpeed = NumberRange.new(200)
-swirl.Orientation = Enum.ParticleOrientation.VelocityPerpendicular
-
-local Bolts = Instance.new("ParticleEmitter", Attachment)
-Bolts.Name = "Bolts"
-Bolts.Lifetime = NumberRange.new(0.333)
-Bolts.LockedToPart = true
-Bolts.Transparency = NumberSequence.new({
-    NumberSequenceKeypoint.new(0, 0.88), NumberSequenceKeypoint.new(0.055, 0.98),
-    NumberSequenceKeypoint.new(0.111, 0.17), NumberSequenceKeypoint.new(0.166, 0.39),
-    NumberSequenceKeypoint.new(0.222, 0.12), NumberSequenceKeypoint.new(0.277, 0.92),
-    NumberSequenceKeypoint.new(0.333, 0.41), NumberSequenceKeypoint.new(0.388, 0.21),
-    NumberSequenceKeypoint.new(0.444, 0.78), NumberSequenceKeypoint.new(0.499, 0.23),
-    NumberSequenceKeypoint.new(0.555, 0.78), NumberSequenceKeypoint.new(0.610, 0.81),
-    NumberSequenceKeypoint.new(0.666, 0.91), NumberSequenceKeypoint.new(0.721, 0.87),
-    NumberSequenceKeypoint.new(0.777, 0.41), NumberSequenceKeypoint.new(0.832, 0.30),
-    NumberSequenceKeypoint.new(0.888, 0.16), NumberSequenceKeypoint.new(0.943, 0.39),
-    NumberSequenceKeypoint.new(0.999, 0.70), NumberSequenceKeypoint.new(1, 1)
-})
-Bolts.LightEmission = 1
-Bolts.Color = ColorSequence.new(Settings.Visuals.SelfESP.Aura.Color)
-Bolts.Speed = NumberRange.new(0)
-Bolts.Size = NumberSequence.new(4.8)
-Bolts.Rate = 12
-Bolts.Texture = "rbxassetid://1084955012"
-Bolts.Rotation = NumberRange.new(-180, 180)
-
-local Bubble = Instance.new("ParticleEmitter", Attachment)
-Bubble.Name = "Bubble"
-Bubble.Lifetime = NumberRange.new(1)
-Bubble.LockedToPart = true
-Bubble.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(0.5, 0.7), NumberSequenceKeypoint.new(1, 1)})
-Bubble.LightEmission = 1
-Bubble.Color = ColorSequence.new(Settings.Visuals.SelfESP.Aura.Color)
-Bubble.Speed = NumberRange.new(0)
-Bubble.Size = NumberSequence.new(4)
-Bubble.Rate = 6
-Bubble.Texture = "rbxassetid://1084955488"
-Bubble.Rotation = NumberRange.new(-180, 180)
-
-local function applyAura(auraName)
-    local character = player.Character or player.CharacterAdded:Wait()
-    local humanoidRootPart = character:WaitForChild("HumanoidRootPart")
-
-    Attachment.Parent = humanoidRootPart
-
-    if getgenv().auraEnabled then
-        swirl.Enabled = auraName == "Skibidi RedRizz"
-        Bolts.Enabled = auraName == "Bolts"
-        Bubble.Enabled = auraName == "Bubble"
-        humanoidRootPart.Material = Enum.Material.Neon
-    else
-        swirl.Enabled = false
-        Bolts.Enabled = false
-        Bubble.Enabled = false
-    end
-end
-
-local function onCharacterAdded(character)
-    if getgenv().auraEnabled then
-        applyAura(getgenv().selectedAura or "Skibidi RedRizz")
-    end
-end
-
-player.CharacterAdded:Connect(onCharacterAdded)
-if player.Character then onCharacterAdded(player.Character) end
-
-Auras:AddToggle("AuraToggle", {
-    Text = "Auras",
-    Default = false,
-    Callback = function(state)
-        getgenv().auraEnabled = state
-        applyAura(getgenv().selectedAura or "Skibidi RedRizz")
-    end
-}):AddColorPicker("AuraColor", {
-    Text = "Aura Color",
-    Default = Settings.Visuals.SelfESP.Aura.Color,
-    Callback = function(color)
-        Settings.Visuals.SelfESP.Aura.Color = color
-        swirl.Color = ColorSequence.new(color)
-        Bolts.Color = ColorSequence.new(color)
-        Bubble.Color = ColorSequence.new(color)
-        if getgenv().auraEnabled then
-            applyAura(getgenv().selectedAura or "Skibidi RedRizz")
-        end
-    end
-})
-
-Auras:AddDropdown("AuraType", {
-    Text = "Select Aura",
-    Values = {"Skibidi RedRizz", "Bolts", "Bubble"},
-    Default = "Bubble",
-    Callback = function(selected)
-        getgenv().selectedAura = selected
-        if getgenv().auraEnabled then
-            applyAura(selected)
-        end
-    end
-})
-
-local targetstuffyh = Tabs.Visuals:AddLeftGroupbox('Target visuals')
-
-targetstuffyh:AddToggle("TracerToggle", {
-    Text = "Draw Tracer",
-    Default = false,
-    Callback = function(Value)
-        TracerEnabled = Value
-        if not Value then
-            tracer.Visible = false
-        end
-    end
-}):AddColorPicker('HitboxColorPicker', {
-    Text = '',
-    Default = Color3.new(0, 1, 1),
-    Callback = function(color)
-        tracer.Color = color
-    end,
-})
-
-targetstuffyh:AddDropdown("TracerMode", {
-    Text = "Tracer Mode",
-    Values = {"Mouse", "HumanoidRootPart"},
-    Default = "Mouse",
-    Callback = function(Value)
-        targetToMouseTracer = (Value == "Mouse")
-    end
-})
-
-getgenv().envt = Tabs.Visuals:AddRightGroupbox("Environment")
-
-getgenv().Lighting = game:GetService("Lighting")
-
--- Get current game values as defaults
-getgenv().DefaultFogStart = Lighting.FogStart
-getgenv().DefaultFogEnd = Lighting.FogEnd
-getgenv().DefaultFogColor = Lighting.FogColor
-getgenv().DefaultAmbient = Lighting.Ambient
-getgenv().DefaultTechnology = Lighting.Technology.Name
-
-envt:AddToggle('FogToggle', {
-    Text = 'Fog Changer',
-    Default = false,
-
-    Callback = function(Value)
-        if Value then
-            Lighting.FogEnd = getgenv().FogEnd or DefaultFogEnd
-            Lighting.FogStart = getgenv().FogStart or DefaultFogStart
-        else
-            Lighting.FogEnd = DefaultFogEnd
-            Lighting.FogStart = DefaultFogStart
-            Lighting.FogColor = DefaultFogColor
-        end
-    end
-}):AddColorPicker('FogColor', {
-    Default = DefaultFogColor,
-    Title = 'Fog Color',
-
-    Callback = function(Value)
-        Lighting.FogColor = Value
-    end
-})
-
-envt:AddSlider('FogStart', {
-    Text = 'Fog Start',
-    Default = DefaultFogStart,
-    Min = 0,
-    Max = 1000,
-    Rounding = 1,
-
-    Callback = function(Value)
-        getgenv().FogStart = Value
-        Lighting.FogStart = Value
-    end
-})
-
-envt:AddSlider('FogEnd', {
-    Text = 'Fog End',
-    Default = DefaultFogEnd,
-    Min = 10,
-    Max = 10000,
-    Rounding = 1,
-
-    Callback = function(Value)
-        getgenv().FogEnd = Value
-        Lighting.FogEnd = Value
-    end
-})
-
-envt:AddToggle('AmbientToggle', {
-    Text = 'Ambient',
-    Default = false,
-
-    Callback = function(Value)
-        if Value then
-            Lighting.Ambient = getgenv().AmbientColor or DefaultAmbient
-        else
-            Lighting.Ambient = DefaultAmbient
-        end
-    end
-}):AddColorPicker('AmbientColor', {
-    Default = DefaultAmbient,
-    Title = 'Ambient Color',
-
-    Callback = function(Value)
-        getgenv().AmbientColor = Value
-        Lighting.Ambient = Value
-    end
-})
-
-envt:AddDropdown('LightingTech', {
-    Text = 'Technology',
-    Values = {'Voxel', 'Compatibility', 'ShadowMap', 'Future'},
-    Default = table.find({'Voxel', 'Compatibility', 'ShadowMap', 'Future'}, DefaultTechnology) or 1,
-
-    Callback = function(Value)
-        Lighting.Technology = Enum.Technology[Value]
-    end
-})
-
-
-getgenv().walkSpeedEnabled, getgenv().jumpPowerEnabled, getgenv().cframeSpeedEnabled = false, false, false
-getgenv().walkSpeedKeybindActive, getgenv().cframeSpeedKeybindActive = false, false
-getgenv().walkSpeed, getgenv().jumpPower, getgenv().cframeSpeed = 16, 50, 10
-
-local uhhh = Tabs.Character:AddLeftGroupbox('Movement')
-
-uhhh:AddToggle('CFrameSpeedToggle', {
-    Text = 'cframe',
-    Default = false,
-    Callback = function(state)
-        getgenv().cframeSpeedEnabled = state
-        if not state then getgenv().cframeSpeedKeybindActive = false end
-    end,
-}):AddKeyPicker('CFrameSpeedKeybind', {
-    Default = 'T',
-    Text = 'Cframe',
-    Mode = 'Toggle',
-    Callback = function(state)
-        if game:GetService("UserInputService"):GetFocusedTextBox() then return end
-        if getgenv().cframeSpeedEnabled then getgenv().cframeSpeedKeybindActive = state end
-    end,
-})
-
-uhhh:AddToggle('WalkSpeedToggle', {
-    Text = 'WalkSpeed',
-    Default = false,
-    Callback = function(state)
-        getgenv().walkSpeedEnabled = state
-        if not state then getgenv().walkSpeedKeybindActive = false end
-    end,
-}):AddKeyPicker('WalkSpeedKeybind', {
-    Default = 'T',
-    Text = 'Velocity',
-    Mode = 'Toggle',
-    Callback = function(state)
-        if game:GetService("UserInputService"):GetFocusedTextBox() then return end
-        if getgenv().walkSpeedEnabled then getgenv().walkSpeedKeybindActive = state end
-    end,
-})
-
-uhhh:AddToggle('JumpPowerToggle', {
-    Text = 'JumpPower',
-    Default = false,
-    Callback = function(state)
-        getgenv().jumpPowerEnabled = state
-    end,
-})
-
-uhhh:AddSlider('WalkSpeedSlider', {
-    Text = 'WalkSpeed',
-    Default = 16,
-    Min = 16,
-    Max = 500,
-    Rounding = 0,
-    Callback = function(value)
-        getgenv().walkSpeed = value
-    end,
-})
-
-uhhh:AddSlider('JumpPowerSlider', {
-    Text = 'JumpPower',
-    Default = 50,
-    Min = 50,
-    Max = 500,
-    Rounding = 0,
-    Callback = function(value)
-        getgenv().jumpPower = value
-    end,
-})
-
-uhhh:AddSlider('CFrameSpeedSlider', {
-    Text = 'Speed',
-    Default = 10,
-    Min = 1,
-    Max = 200,
-    Rounding = 1,
-    Callback = function(value)
-        getgenv().cframeSpeed = value
-    end,
-})
-
-game:GetService('RunService').RenderStepped:Connect(function()
-    local player = game.Players.LocalPlayer
-    local humanoid = player.Character and player.Character:FindFirstChild('Humanoid')
-    if not humanoid then return end
+local function setupEquipAll()
+    local char = localPlayer.Character
+    local backpack = localPlayer.Backpack
+    if not char or not backpack or not matchacc.EquipAllGuns.Enabled then return end
     
-    humanoid.WalkSpeed = getgenv().walkSpeedEnabled and getgenv().walkSpeedKeybindActive and getgenv().walkSpeed or 16
-    humanoid.JumpPower = getgenv().jumpPowerEnabled and getgenv().jumpPower or 50
-end)
-
-task.spawn(function()
-    while task.wait(0) do
-        local player = game.Players.LocalPlayer
-        local character = player.Character
-        local humanoid = character and character:FindFirstChild("Humanoid")
-        if getgenv().cframeSpeedEnabled and getgenv().cframeSpeedKeybindActive and character and humanoid and humanoid.MoveDirection.Magnitude > 0 then
-            character:TranslateBy(humanoid.MoveDirection * getgenv().cframeSpeed * task.wait() * 3)
-        end
+    equipAllGuns()
+    
+    if EquipAllConnection then
+        EquipAllConnection:Disconnect()
+        EquipAllConnection = nil
     end
-end)
-
-
-getgenv().FlightKeybind = Enum.KeyCode.X
-getgenv().FlySpeed = 50
-getgenv().FlightEnabled = false
-getgenv().Flying = false
-
-local function CreateCore()
-    if workspace:FindFirstChild("Core") then workspace.Core:Destroy() end
-    local Core = Instance.new("Part")
-    Core.Name = "Core"
-    Core.Size = Vector3.new(0.05, 0.05, 0.05)
-    Core.CanCollide = false
-    Core.Transparency = 1
-    Core.Parent = workspace
-    local Weld = Instance.new("Weld", Core)
-    Weld.Part0 = Core
-    Weld.Part1 = LocalPlayer.Character.HumanoidRootPart
-    Weld.C0 = CFrame.new(0, 0, 0)
-    return Core
-end
-
-local function StartFly()
-    if getgenv().Flying then return end
-    getgenv().Flying = true
-    LocalPlayer.Character:FindFirstChildOfClass("Humanoid").PlatformStand = true
-    local Core = CreateCore()
-    local BV = Instance.new("BodyVelocity", Core)
-    BV.MaxForce = Vector3.new(9e9, 9e9, 9e9)
-    BV.Velocity = Vector3.zero
-    local BG = Instance.new("BodyGyro", Core)
-    BG.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
-    BG.P = 9e4
-    BG.CFrame = Core.CFrame
-    RunService.RenderStepped:Connect(function()
-        if not getgenv().Flying then return end
-        local camera = workspace.CurrentCamera
-        local moveDirection = Vector3.zero
-        if UserInputService:IsKeyDown(Enum.KeyCode.W) then moveDirection = moveDirection + camera.CFrame.LookVector end
-        if UserInputService:IsKeyDown(Enum.KeyCode.S) then moveDirection = moveDirection - camera.CFrame.LookVector end
-        if UserInputService:IsKeyDown(Enum.KeyCode.A) then moveDirection = moveDirection - camera.CFrame.RightVector end
-        if UserInputService:IsKeyDown(Enum.KeyCode.D) then moveDirection = moveDirection + camera.CFrame.RightVector end
-        if UserInputService:IsKeyDown(Enum.KeyCode.Space) then moveDirection = moveDirection + Vector3.new(0, 1, 0) end
-        if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then moveDirection = moveDirection - Vector3.new(0, 1, 0) end
-        BV.Velocity = moveDirection * getgenv().FlySpeed
-        BG.CFrame = camera.CFrame
+    EquipAllConnection = char.ChildRemoved:Connect(function(child)
+        if matchacc.EquipAllGuns.Enabled and child:IsA("Tool") and child:FindFirstChild("Ammo") and (tick() - lastEquipTime) >= 0.5 then
+            lastEquipTime = tick()
+            task.spawn(function()
+                task.wait(0.1)
+                equipAllGuns()
+            end)
+        end
+    end)
+    
+    if EquipAddedConnection then
+        EquipAddedConnection:Disconnect()
+        EquipAddedConnection = nil
+    end
+    EquipAddedConnection = backpack.ChildAdded:Connect(function(child)
+        if matchacc.EquipAllGuns.Enabled and child:IsA("Tool") and child:FindFirstChild("Ammo") then
+            child.Parent = char
+        end
     end)
 end
 
-local function StopFly()
-    if not getgenv().Flying then return end
-    getgenv().Flying = false
-    LocalPlayer.Character:FindFirstChildOfClass("Humanoid").PlatformStand = false
-    if workspace:FindFirstChild("Core") then workspace.Core:Destroy() end
-end
-
-uhhh:AddToggle("FlightToggle", {
-    Text = "Flight",
-    Default = false,
-    Callback = function(state)
-        getgenv().FlightEnabled = state
-        if not state then StopFly() end
+-- Character respawn
+localPlayer.CharacterAdded:Connect(function()
+    task.wait(5)
+    if matchacc.EquipAllGuns.Enabled then
+        setupEquipAll()
     end
-}):AddKeyPicker("FlightKeybindPicker", {
-    Default = "X",
-    Text = "Flight",
-    Mode = "Toggle",
-    Callback = function(state)
-        if UserInputService:GetFocusedTextBox() then return end
-        if state and getgenv().FlightEnabled then
-            StartFly()
+end)
+
+-- Thêm vào GunModsGroup (sau Wallbang)
+GunModsGroup:AddToggle('EquipAllGunsEnabled', {
+    Text = 'Equip All Guns',
+    Default = false,
+    Callback = function(Value)
+        matchacc.EquipAllGuns.Enabled = Value
+        if Value then
+            setupEquipAll()
         else
-            StopFly()
+            if EquipAllConnection then
+                EquipAllConnection:Disconnect()
+                EquipAllConnection = nil
+            end
         end
     end
+}):AddKeyPicker('EquipAllGunsKey', {
+    Default = 'none',
+    SyncToggleState = true,
+    Mode = 'Toggle',
+    Text = 'Equip All Guns'
 })
-
-uhhh:AddSlider("FlySpeedSlider", {
-    Text = "Fly Speed",
-    Default = 50,
-    Min = 10,
-    Max = 5000,
-    Rounding = 0,
-    Callback = function(value)
-        getgenv().FlySpeed = value
-    end
-})
-
-getgenv().SpinbotEnabled = false
-getgenv().SpinSpeed = 10
-
-local function toggleSpinbot(state)
-    if state then
-        if not getgenv().SpinConnection then
-            getgenv().SpinConnection = game:GetService("RunService").RenderStepped:Connect(function()
-                if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") and not getgenv().Flying then
-                    LocalPlayer.Character.Humanoid.AutoRotate = false
-                    LocalPlayer.Character.HumanoidRootPart.CFrame = LocalPlayer.Character.HumanoidRootPart.CFrame * CFrame.Angles(0, math.rad(getgenv().SpinSpeed), 0)
+GunModsGroup:AddToggle('RapidFireEnabled', {
+    Text = 'Rapid Fire',
+    Default = false,
+    Callback = function(Value)
+        matchacc.RapidFire.Enabled = Value
+        if not getnamecallmethod then
+            local iter, tbl, index = ipairs(game:GetDescendants())
+            while true do
+                local instance
+                index, instance = iter(tbl, index)
+                if index == nil then
+                    break
+                end
+                if instance.Name == "ShootingCooldown" and instance:IsA("ValueBase") then
+                    instance.Value = 0
+                end
+            end
+            game.DescendantAdded:Connect(function(newDescendant)
+                if newDescendant.Name == "ShootingCooldown" and newDescendant:IsA("ValueBase") then
+                    newDescendant.Value = 0
                 end
             end)
-        end
-    else
-        if getgenv().SpinConnection then
-            getgenv().SpinConnection:Disconnect()
-            getgenv().SpinConnection = nil
-        end
-        if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then
-            LocalPlayer.Character.Humanoid.AutoRotate = true
+            local iter2, tbl2, index2 = ipairs(game:GetDescendants())
+            while true do
+                local instance2
+                index2, instance2 = iter2(tbl2, index2)
+                if index2 == nil then
+                    break
+                end
+                if instance2.Name == "ToleranceCooldown" and instance2:IsA("ValueBase") then
+                    instance2.Value = 0
+                end
+            end
+            game.DescendantAdded:Connect(function(newDescendant2)
+                if newDescendant2.Name == "ToleranceCooldown" and newDescendant2:IsA("ValueBase") then
+                    newDescendant2.Value = 0
+                end
+            end)
+            wait(2)
+            game.Players.LocalPlayer.Character.Humanoid.Health = 0
         end
     end
-end
-
-LocalPlayer.CharacterAdded:Connect(function()
-    if getgenv().SpinbotEnabled then
-        toggleSpinbot(true)
-    end
-end)
-
-uhhh:AddToggle('SpinbotToggle', {
-    Text = 'Spinbot',
-    Default = false,
-    Callback = function(state)
-        getgenv().SpinbotEnabled = state
-        toggleSpinbot(state)
-    end,
-}):AddKeyPicker('SpinbotKeybind', {
-    Default = 'N',
-    Text = 'Spinbot',
-    Mode = 'Toggle',
-    Callback = function(state)
-        if not UserInputService:GetFocusedTextBox() and getgenv().SpinbotEnabled then
-            toggleSpinbot(state)
-        end
-    end,
 })
 
-uhhh:AddSlider('SpinSpeedSlider', {
-    Text = 'Spin Speed',
-    Default = 10,
-    Min = 1,
-    Max = 50,
-    Rounding = 1,
-    Callback = function(value)
-        getgenv().SpinSpeed = value
-    end,
-})
-
-local AnimationSpeed = 1
-
-local animation = Instance.new("Animation")
-animation.AnimationId = "rbxassetid://10714340543"
-
-local animationTrack
-local isPlaying = false
-local flossEnabled = false
-
-local function loadAnimationTrack(character)
-    local humanoid = character:WaitForChild("Humanoid")
-    animationTrack = humanoid:LoadAnimation(animation)
-    animationTrack.Looped = true
-    animationTrack.Priority = Enum.AnimationPriority.Action
-    
-    if flossEnabled then
-        task.wait(0.6)
-        animationTrack:Play()
-        animationTrack:AdjustSpeed(AnimationSpeed)
-        isPlaying = true
-    end
-end
-
-game:GetService("Players").LocalPlayer.CharacterAdded:Connect(function(character)
-    loadAnimationTrack(character)
-end)
-
-if game:GetService("Players").LocalPlayer.Character then
-    loadAnimationTrack(game:GetService("Players").LocalPlayer.Character)
-end
-
-local stutz = Tabs.Character:AddRightGroupbox('Misc')
-
-stutz:AddToggle("FlossToggle", {
-    Text = "floss",
+GunModsGroup:AddToggle('WallbangEnabled', {
+    Text = 'Wallbang',
     Default = false,
-    Callback = function(state)
-        flossEnabled = state
-        if state and animationTrack then
-            animationTrack:Play()
-            animationTrack:AdjustSpeed(AnimationSpeed)
-            isPlaying = true
-        elseif not state and animationTrack then
-            animationTrack:Stop()
-            isPlaying = false
-        end
-    end
-}):AddKeyPicker("FlossKeybindPicker", {
-    Default = "V",
-    Text = "Floss",
-    Mode = "Toggle",
-    Callback = function(key)
-        if UserInputService:GetFocusedTextBox() then return end
-        if flossEnabled and animationTrack then
-            if isPlaying then
-                animationTrack:Stop()
+    Callback = function(Value)
+        matchacc.Wallbang.Enabled = Value
+        if getnamecallmethod then
+            local Handler = game:FindService("ReplicatedStorage").MainModule
+            local Module = require(Handler)
+            if Value == true and workspace:FindFirstChild("Vehicles") then
+                Module.Ignored = {workspace:WaitForChild("Vehicles"), workspace:WaitForChild("MAP"), workspace:WaitForChild("Ignored")}
             else
-                animationTrack:Play()
-                animationTrack:AdjustSpeed(AnimationSpeed)
-            end
-            isPlaying = not isPlaying
-        end
-    end
-})
-
-stutz:AddToggle("NoClipToggle", {
-    Text = "NoClip",
-    Default = false,
-    Callback = function(state)
-        noClipEnabled = state
-    end
-}):AddKeyPicker("NoClipKeybindPicker", {
-    Default = "J",
-    Text = "NoClip",
-    Mode = "Toggle",
-    Callback = function(state)
-        if noClipEnabled then
-            local character = game:GetService("Players").LocalPlayer.Character
-            if character then
-                for _, part in pairs(character:GetDescendants()) do
-                    if part:IsA("BasePart") and not part.Name:match("Arm") and not part.Name:match("Leg") then
-                        part.CanCollide = state
-                    end
+                if workspace:FindFirstChild("Vehicles") then
+                    Module.Ignored = {workspace:WaitForChild("Vehicles"), workspace:WaitForChild("Ignored")}
                 end
             end
-        end
-    end
-})
-
-
-DesyncBox = Tabs.Character:AddRightGroupbox("Anti Aim")
-
-local UserInputService = game:GetService("UserInputService")
-local RunService = game:GetService("RunService")
-local LocalPlayer = game:GetService("Players").LocalPlayer
-
-desync_setback = Instance.new("Part")
-desync_setback.Name = "Desync Setback"
-desync_setback.Parent = workspace
-desync_setback.Size = Vector3.new(2, 2, 1)
-desync_setback.CanCollide = false
-desync_setback.Anchored = true
-desync_setback.Transparency = 1
-
-desync = {
-    enabled = false,
-    mode = "Void",
-    teleportPosition = Vector3.new(0, 0, 0),
-    old_position = nil,
-    voidSpamActive = false,
-    toggleEnabled = false
-}
-
-function resetCamera()
-    if LocalPlayer.Character then
-        local humanoid = LocalPlayer.Character:FindFirstChild("Humanoid")
-        if humanoid then
-            workspace.CurrentCamera.CameraSubject = humanoid
-        end
-    end
-end
-
-function toggleDesync(state)
-    desync.enabled = state
-    if desync.enabled then
-        workspace.CurrentCamera.CameraSubject = desync_setback
-        Library:Notify("Desync Enabled '" .. desync.mode .. "' Havoc.cc $", 2)
-    else
-        resetCamera()
-        Library:Notify("Desync Disabled '" .. desync.mode .. "' Havoc.cc  $", 2)
-    end
-end
-
-function setDesyncMode(mode)
-    desync.mode = mode
-end
-
-DesyncBox:AddToggle('DesyncToggle', {
-    Text = 'Anti Aim',
-    Default = false,
-    Callback = function(state)
-        desync.toggleEnabled = state
-        if not state then
-            toggleDesync(false)
-        end
-    end,
-}):AddKeyPicker('DesyncKeybind', {
-    Default = 'V',
-    Text = 'Desync',
-    Mode = 'Toggle',
-    Callback = function(state)
-        if not desync.toggleEnabled or UserInputService:GetFocusedTextBox() then return end
-        toggleDesync(not desync.enabled)
-    end,
-})
-
-DesyncBox:AddDropdown('DesyncMethodDropdown', {
-    Values = {"Destroy Cheaters", "Underground", "Void Spam", "Void"},
-    Default = "Void",
-    Multi = false,
-    Text = 'Method',
-    Callback = function(selected)
-        setDesyncMode(selected)
-    end
-})
-
-RunService.Heartbeat:Connect(function()
-    if desync.enabled and LocalPlayer.Character then
-        local rootPart = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-        if rootPart then
-            desync.old_position = rootPart.CFrame
-
-            if desync.mode == "Destroy Cheaters" then
-                desync.teleportPosition = Vector3.new(11223344556677889900, 1, 1)
-
-            elseif desync.mode == "Underground" then
-                desync.teleportPosition = rootPart.Position - Vector3.new(0, 12, 0)
-
-            elseif desync.mode == "Void Spam" then
-                desync.teleportPosition = math.random(1, 2) == 1 and desync.old_position.Position or Vector3.new(
-                    math.random(10000, 50000),
-                    math.random(10000, 50000),
-                    math.random(10000, 50000)
-                )
-
-            elseif desync.mode == "Void" then
-                desync.teleportPosition = Vector3.new(
-                    rootPart.Position.X + math.random(-444444, 444444),
-                    rootPart.Position.Y + math.random(-444444, 444444),
-                    rootPart.Position.Z + math.random(-44444, 44444)
-                )
-            end
-
-            if desync.mode ~= "Rotation" then
-                rootPart.CFrame = CFrame.new(desync.teleportPosition)
-                workspace.CurrentCamera.CameraSubject = desync_setback
-
-                RunService.RenderStepped:Wait()
-
-                desync_setback.CFrame = desync.old_position * CFrame.new(0, rootPart.Size.Y / 2 + 0.5, 0)
-                rootPart.CFrame = desync.old_position
-            end
-        end
-    end
-end)
-
-local antifling = nil
-
-stutz:AddToggle("AntiflingToggle", {
-    Text = "Antifling",
-    Default = false,
-    Callback = function(state)
-        if state then
-            antifling = game:GetService("RunService").Stepped:Connect(function()
-                for _, player in pairs(game:GetService("Players"):GetPlayers()) do
-                    if player ~= game.Players.LocalPlayer and player.Character then
-                        for _, v in pairs(player.Character:GetDescendants()) do
-                            if v:IsA("BasePart") then
-                                v.CanCollide = false
-                            end
-                        end
-                    end
-                end
-            end)
         else
-            if antifling then
-                antifling:Disconnect()
-                antifling = nil
-            end
+            Library:Notify("Your executor does not support this feature.", 3)
         end
     end
 })
-
-
 getgenv().RemoveShootAnimationsEnabled = false
 getgenv().ShootAnimationIds = {
     ["rbxassetid://2807049953"] = true, 
@@ -2743,7 +2149,7 @@ getgenv().MonitorAnimations = function()
     end)
 end
 
-GunMods:AddToggle("AntiflingToggle", {
+GunModsGroup:AddToggle("AntiflingToggle", {
     Text = "remove shoot animations",
     Default = false,
     Callback = function(enabled)
@@ -2751,6 +2157,3664 @@ GunMods:AddToggle("AntiflingToggle", {
         if enabled then
             getgenv().MonitorPlayers()
             task.spawn(getgenv().MonitorAnimations)
+        end
+    end
+})
+
+
+
+local HitboxGroup = Tabs.Main:AddRightGroupbox('Hitbox Expander')
+
+HitboxGroup:AddToggle('HitboxEnabled', {
+    Text = 'Enabled',
+    Default = false,
+    Callback = function(Value)
+        matchacc.HitboxExpander.Enabled = Value
+    end
+})
+
+HitboxGroup:AddToggle('HitboxVisualize', {
+    Text = 'Visualize',
+    Default = false,
+    Callback = function(Value)
+        matchacc.HitboxExpander.Visualize = Value
+    end
+}):AddColorPicker('HitboxColor', {
+    Default = matchacc.HitboxExpander.Color,
+    Title = 'Fill Color',
+    Callback = function(Value)
+        matchacc.HitboxExpander.Color = Value
+    end
+}):AddColorPicker('HitboxOutline', {
+    Default = matchacc.HitboxExpander.OutlineColor,
+    Title = 'Outline Color',
+    Callback = function(Value)
+        matchacc.HitboxExpander.OutlineColor = Value
+    end
+})
+
+HitboxGroup:AddSlider('HitboxFillTrans', {
+    Text = 'Fill Transparency',
+    Default = 0.5,
+    Min = 0,
+    Max = 1,
+    Rounding = 2,
+    Callback = function(Value)
+        matchacc.HitboxExpander.FillTransparency = Value
+    end
+})
+
+HitboxGroup:AddSlider('HitboxOutlineTrans', {
+    Text = 'Outline Transparency',
+    Default = 0.3,
+    Min = 0,
+    Max = 1,
+    Rounding = 2,
+    Callback = function(Value)
+        matchacc.HitboxExpander.OutlineTransparency = Value
+    end
+})
+
+HitboxGroup:AddSlider('HitboxSize', {
+    Text = 'Size',
+    Default = 15,
+    Min = 1,
+    Max = 37,
+    Rounding = 0,
+    Callback = function(Value)
+        matchacc.HitboxExpander.Size = Value
+    end
+})
+
+getgenv().Matcha.Legit = {
+    Aimlock = false,
+    HitPart = "Head",
+    Smoothing = false,
+    SmoothingAmount = 0.1,
+    SilentAim = false,  -- Mới: Toggle cho Silent Aim
+    SilentAimMethod = "Rival",  -- Mới: Default method
+    Prediction = 0.1,
+    JumpOffset = 0,
+    Offset = true,
+    SilentFOV = 100,
+    SilentFOVEnabled = false,
+    Resolver = false,
+}
+local LegitBox = Tabs.Main:AddRightTabbox()
+local AimlockBox = LegitBox:AddTab('Aimlock')
+local SilentBox = LegitBox:AddTab('SilentAim')
+SilentBox:AddToggle('SilentAimEnabled', {
+    Text = 'Silent Aim',
+    Default = false,
+    Callback = function(Value)
+        getgenv().Matcha.Legit.SilentAim = Value
+    end
+})
+
+SilentBox:AddDropdown('SilentAimMethod', {
+    Values = {'Rival', 'Flick'},
+    Default = 0,
+    Multi = false,
+    Text = 'Silent Aim Method',
+    Callback = function(Value)
+        getgenv().Matcha.Legit.SilentAimMethod = Value
+    end
+})
+SilentBox:AddToggle('SilentAimEnabled', {
+    Text = 'Silent Fov Enabled',
+    Default = false,
+    Callback = function(Value)
+        getgenv().Matcha.Legit.SilentFOVEnabled = Value
+    end
+})
+SilentBox:AddSlider('SilentFOV', {
+    Text = 'Silent Aim FOV',
+    Default = 100,
+    Min = 10,
+    Max = 1000,
+    Rounding = 0,
+    Callback = function(Value)
+        getgenv().Matcha.Legit.SilentFOV = Value
+    end
+})
+local camera = workspace.CurrentCamera
+if game.GameId ~= 17625359962 then
+local function isLobbyVisible()
+    return localPlayer.PlayerGui.MainGui.MainFrame.Lobby.Currency.Visible == true
+end
+local function getClosestPlayerToMouse()  -- Hàm closest player từ code Rival
+    local closestPlayer = nil
+    local shortestDistance = getgenv().Matcha.Legit.SilentFOVEnabled and getgenv().Matcha.Legit.SilentFOV or 9999
+    local mousePosition = UserInputService:GetMouseLocation()
+
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("Head") then
+            local head = player.Character.Head
+            local headPosition, onScreen = Camera:WorldToViewportPoint(head.Position)
+	        if not isAlive(player) then continue end
+
+	        if not isPlayerVisible(player) then continue end
+            if onScreen then
+                local screenPosition = Vector2.new(headPosition.X, headPosition.Y)
+                local distance = (screenPosition - mousePosition).Magnitude
+
+                if distance < shortestDistance then
+                    closestPlayer = player
+                    shortestDistance = distance
+                end
+            end
+        end
+    end
+
+    return closestPlayer
+end
+local isLeftMouseDown = false
+local autoClickConnection = nil
+local function autoClick()
+    if autoClickConnection then
+        autoClickConnection:Disconnect()
+    end
+    autoClickConnection = RunService.Heartbeat:Connect(function()
+        if isLeftMouseDown then
+            if not isLobbyVisible() then
+                mouse1click()
+            end
+        else
+            autoClickConnection:Disconnect()
+        end
+    end)
+end
+UserInputService.InputBegan:Connect(function(input, isProcessed)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 and not isProcessed then
+        if not isLeftMouseDown then
+            isLeftMouseDown = true
+            autoClick()
+        end
+    end
+end)
+UserInputService.InputEnded:Connect(function(input, isProcessed)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 and not isProcessed then
+        isLeftMouseDown = false
+    end
+end)
+local function lockCameraToHead(targetPlayer)
+    if targetPlayer and targetPlayer.Character and targetPlayer.Character:FindFirstChild("Head") then
+        local head = targetPlayer.Character.Head
+        local headPosition = Camera:WorldToViewportPoint(head.Position)
+        if headPosition.Z > 0 then
+            local cameraPosition = Camera.CFrame.Position
+            Camera.CFrame = CFrame.new(cameraPosition, head.Position)
+        end
+    end
+end
+
+-- RunService cho Rival (chạy khi method là Rival)
+RunService.Heartbeat:Connect(function()
+    if getgenv().Matcha.Legit.SilentAim and getgenv().Matcha.Legit.SilentAimMethod == "Rival" and not isLobbyVisible() then
+        local targetPlayer = getClosestPlayerToMouse()  -- Closest player
+        if targetPlayer then
+            lockCameraToHead(targetPlayer)
+        end
+    end
+end)
+end
+spawn(function()
+    local BulletHandler = nil
+    local OldFire = nil
+
+    local function get_closest_target(range)
+        local closest_part, closest_distance = nil, range
+        local mousePos = UserInputService:GetMouseLocation()
+
+        for _, player in pairs(players:GetPlayers()) do
+            if player == localPlayer or not player.Character or not player.Character:FindFirstChild("Head") then continue end
+            local hum = player.Character:FindFirstChildOfClass("Humanoid")
+	        if not isAlive(player) then continue end
+	        if not isPlayerVisible(player) then continue end
+            local headPos, onScreen = Camera:WorldToViewportPoint(player.Character.Head.Position)
+            if not onScreen then continue end
+
+            local dist = (Vector2.new(headPos.X, headPos.Y) - mousePos).Magnitude
+            if dist < closest_distance then
+                closest_distance = dist
+                closest_part = player.Character.Head
+            end
+        end
+        return closest_part
+    end
+
+    RunService.Heartbeat:Connect(function()
+        if not getgenv().Matcha.Legit.SilentAim or getgenv().Matcha.Legit.SilentAimMethod ~= "Flick" then
+            if BulletHandler and OldFire then
+                BulletHandler.Fire = OldFire
+                BulletHandler = nil
+                OldFire = nil
+            end
+            return
+        end
+
+        if not BulletHandler then
+            local success, mod = pcall(function()
+                return require(ReplicatedStorage:FindFirstChild("ModuleScripts", true):FindFirstChild("GunModules", true).BulletHandler)
+            end)
+            if not success then
+                -- gc fallback cực mạnh cho Rivals
+                for _, v in pairs(getgc(true)) do
+                    if typeof(v) == "table" and rawget(v, "Fire") and typeof(rawget(v, "Fire")) == "function" then
+                        BulletHandler = v
+                        break
+                    end
+                end
+            else
+                BulletHandler = mod
+            end
+
+            if BulletHandler and BulletHandler.Fire then
+                OldFire = BulletHandler.Fire
+                BulletHandler.Fire = newcclosure(function(data, ...)
+                    if not getgenv().Matcha.Legit.SilentAim then
+                        return OldFire(data, ...)
+                    end
+
+                    local closest = get_closest_target(getgenv().Matcha.Legit.SilentFOVEnabled and getgenv().Matcha.Legit.SilentFOV or 9999)
+
+                    if closest then
+                        local pred = 0
+                        local predictedPos = closest.Position + (closest.Velocity * pred)
+
+                        data.Direction = (predictedPos - data.Origin).Unit
+                        data.Force = data.Force * 1000
+                    end
+
+                    return OldFire(data, ...)
+                end)
+            end
+        end
+    end)
+end)
+
+AimlockBox:AddToggle('AimlockEnabled', {
+    Text = 'Aimlock',
+    Default = false,
+    Callback = function(Value)
+        getgenv().Matcha.Legit.Aimlock = Value
+    end
+})
+AimlockBox:AddDropdown('HitPart', {
+    Values = {'Head', 'UpperTorso', 'HumanoidRootPart'},
+    Default = 1,
+    Multi = false,
+    Text = 'Hit Part',
+    Callback = function(Value)
+        getgenv().Matcha.Legit.HitPart = Value
+    end
+})
+AimlockBox:AddToggle('SmoothingEnabled', {
+    Text = 'Smoothing',
+    Default = false,
+    Callback = function(Value)
+        getgenv().Matcha.Legit.Smoothing = Value
+    end
+})
+AimlockBox:AddSlider('SmoothingAmount', {
+    Text = 'Smoothing Amount',
+    Default = 0.1,
+    Min = 0,
+    Max = 1,
+    Rounding = 2,
+    Callback = function(Value)
+        getgenv().Matcha.Legit.SmoothingAmount = Value
+    end
+})
+AimlockBox:AddSlider('Prediction', {
+    Text = 'Prediction',
+    Default = 0.1,
+    Min = 0,
+    Max = 1,
+    Rounding = 2,
+    Callback = function(Value)
+        getgenv().Matcha.Legit.Prediction = Value
+    end
+})
+AimlockBox:AddSlider('JumpOffset', {
+    Text = 'Jump Offset',
+    Default = 0,
+    Min = -10,
+    Max = 10,
+    Rounding = 1,
+    Callback = function(Value)
+        getgenv().Matcha.Legit.JumpOffset = Value
+    end
+})
+AimlockBox:AddToggle('ResolverToggle', {
+    Text = 'Resolver',
+    Default = false,
+    Callback = function(Value)
+        getgenv().Matcha.Legit.Resolver = Value
+    end
+})
+local VelocityData = {}
+
+RunService.Heartbeat:Connect(function(dT)
+    if dT > 0.5 then return end -- chống spike
+    for _, plr in Players:GetPlayers() do
+        if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
+            local hrp = plr.Character.HumanoidRootPart
+            
+            if not VelocityData[plr] then
+                VelocityData[plr] = {
+                    PreviousPosition = hrp.Position,
+                    Velocity = Vector3.zero
+                }
+            end
+            
+            local data = VelocityData[plr]
+            local displacement = hrp.Position - data.PreviousPosition
+            data.Velocity = displacement / dT
+            data.PreviousPosition = hrp.Position
+        end
+    end
+end)
+
+--// CLEANUP KHI PLAYER LEAVE (tùy chọn nhưng nên có)
+Players.PlayerRemoving:Connect(function(plr)
+    VelocityData[plr] = nil
+end)
+--// UPDATECAMLOCK SAU KHI THÊM RESOLVER (thay toàn bộ function cũ bằng cái này)
+local function updateCamlock()
+    local targetName = matchacc.TargetAim.Target
+    if not getgenv().Matcha.Legit.Aimlock then return end
+    
+    local target = players:FindFirstChild(targetName)
+    if not target or not target.Character then
+        return
+    end
+    
+    local part = target.Character:FindFirstChild(getgenv().Matcha.Legit.HitPart)
+    if not part or not isAlive(target) or not isPlayerVisible(target) then
+        return
+    end
+    
+    --// LẤY VELOCITY (RESOLVER HOẶC DEFAULT)
+    local velocity = part.AssemblyLinearVelocity
+    if getgenv().Matcha.Legit.Resolver and VelocityData[target] then
+        velocity = VelocityData[target].Velocity
+    end
+    
+    local pred = getgenv().Matcha.Legit.Prediction or 0
+    local pos = part.Position + (velocity * pred)
+    
+    --// JUMP OFFSET (nếu bật và đang rơi/jump)
+    if getgenv().Matcha.Legit.Offset and target.Character.Humanoid:GetState() == Enum.HumanoidStateType.Freefall then
+        pos = pos + Vector3.new(0, getgenv().Matcha.Legit.JumpOffset or 0, 0)
+    end
+    
+    local goal = CFrame.new(Camera.CFrame.Position, pos)
+    
+    if getgenv().Matcha.Legit.Smoothing then
+        Camera.CFrame = Camera.CFrame:Lerp(goal, getgenv().Matcha.Legit.SmoothingAmount)
+    else
+        Camera.CFrame = goal
+    end
+end
+RunService.RenderStepped:Connect(function()
+    if getgenv().Matcha.Legit.Aimlock then
+        updateCamlock()
+    end
+end)
+local ChinaHatGroup = Tabs.Visual:AddRightGroupbox('China Hat')
+getgenv().ChinaHatSettings = {
+    enabled = false, 
+    hatColor = Color3.fromRGB(255, 255, 255), 
+    lightColor = Color3.fromRGB(255, 255, 255), 
+    lightBrightness = 0, 
+    lightRange = 12, 
+    scale = Vector3.new(1.7, 1.1, 1.7), 
+}
+
+-- Thêm Cone.Name = "ChinaHat" vào function CreateHat để dễ find và destroy
+local function CreateHat(Character)
+    local Head = Character:FindFirstChild("Head")
+    if not Head then return end
+    local Cone = Instance.new("Part")
+    Cone.Name = "ChinaHat"  -- Thêm name để dễ quản lý
+    Cone.Size = Vector3.new(1, 1, 1)
+    Cone.BrickColor = BrickColor.new("Hot pink")
+    Cone.Material = Enum.Material.Neon
+    Cone.Transparency = 0.2
+    Cone.Anchored = false
+    Cone.CanCollide = false
+    Cone.Color = getgenv().ChinaHatSettings.hatColor
+    local Mesh = Instance.new("SpecialMesh")
+    Mesh.MeshType = Enum.MeshType.FileMesh
+    Mesh.MeshId = "rbxassetid://1033714"
+    Mesh.Scale = getgenv().ChinaHatSettings.scale
+    Mesh.Parent = Cone
+    local Weld = Instance.new("Weld")
+    Weld.Part0 = Head
+    Weld.Part1 = Cone
+    Weld.C0 = CFrame.new(0, 0.9, 0)
+    Weld.Parent = Cone
+    local Light = Instance.new("PointLight")
+    Light.Color = getgenv().ChinaHatSettings.lightColor
+    Light.Brightness = getgenv().ChinaHatSettings.lightBrightness
+    Light.Range = getgenv().ChinaHatSettings.lightRange
+    Light.Shadows = true
+    Light.Parent = Cone
+    Cone.Parent = Character
+end
+
+local function OnCharacterAdded(Character)
+    if getgenv().ChinaHatSettings.enabled then
+        CreateHat(Character)
+    end
+end
+
+-- Kết nối sự kiện CharacterAdded
+localPlayer.CharacterAdded:Connect(OnCharacterAdded)
+
+-- Nếu character đã tồn tại, áp dụng ngay
+if localPlayer.Character then
+    task.wait(2)
+    OnCharacterAdded(localPlayer.Character)
+end
+
+ChinaHatGroup:AddToggle('ChinaHatEnabled', {
+    Text = "China Hat ESP",
+    Default = getgenv().ChinaHatSettings.enabled,
+    Callback = function(state)
+        getgenv().ChinaHatSettings.enabled = state
+        if state then
+            if localPlayer.Character then
+                OnCharacterAdded(localPlayer.Character)
+            end
+        else
+            if localPlayer.Character then
+                local hat = localPlayer.Character:FindFirstChild("ChinaHat")
+                if hat then
+                    hat:Destroy()
+                end
+            end
+        end
+    end
+}):AddColorPicker('ChinaHatColor', {
+    Default = getgenv().ChinaHatSettings.hatColor,
+    Title = "Hat Color",
+    Callback = function(color)
+        getgenv().ChinaHatSettings.hatColor = color
+        -- Realtime update: destroy và recreate nếu enabled
+        if getgenv().ChinaHatSettings.enabled and localPlayer.Character then
+            local hat = localPlayer.Character:FindFirstChild("ChinaHat")
+            if hat then hat:Destroy() end
+            CreateHat(localPlayer.Character)
+        end
+    end
+}):AddColorPicker('ChinaLightColor', {
+    Default = getgenv().ChinaHatSettings.lightColor,
+    Title = "Light Color",
+    Callback = function(color)
+        getgenv().ChinaHatSettings.lightColor = color
+        if getgenv().ChinaHatSettings.enabled and localPlayer.Character then
+            local hat = localPlayer.Character:FindFirstChild("ChinaHat")
+            if hat then hat:Destroy() end
+            CreateHat(localPlayer.Character)
+        end
+    end
+})
+
+ChinaHatGroup:AddSlider('ChinaLightBrightness', {
+    Text = "Light Brightness",
+    Min = 0,
+    Max = 10,
+    Default = getgenv().ChinaHatSettings.lightBrightness,
+    Rounding = 1,
+    Compact = false,
+    Callback = function(value)
+        getgenv().ChinaHatSettings.lightBrightness = value
+        if getgenv().ChinaHatSettings.enabled and localPlayer.Character then
+            local hat = localPlayer.Character:FindFirstChild("ChinaHat")
+            if hat then hat:Destroy() end
+            CreateHat(localPlayer.Character)
+        end
+    end
+})
+
+ChinaHatGroup:AddSlider('ChinaLightRange', {
+    Text = "Light Range",
+    Min = 0,
+    Max = 50,
+    Default = getgenv().ChinaHatSettings.lightRange,
+    Rounding = 0,
+    Compact = false,
+    Callback = function(value)
+        getgenv().ChinaHatSettings.lightRange = value
+        if getgenv().ChinaHatSettings.enabled and localPlayer.Character then
+            local hat = localPlayer.Character:FindFirstChild("ChinaHat")
+            if hat then hat:Destroy() end
+            CreateHat(localPlayer.Character)
+        end
+    end
+})
+
+ChinaHatGroup:AddSlider('ChinaHatScaleX', {
+    Text = "Hat Scale X",
+    Min = 0.5,
+    Max = 3,
+    Default = getgenv().ChinaHatSettings.scale.X,
+    Rounding = 2,
+    Compact = false,
+    Callback = function(value)
+        getgenv().ChinaHatSettings.scale = Vector3.new(value, getgenv().ChinaHatSettings.scale.Y, getgenv().ChinaHatSettings.scale.Z)
+        if getgenv().ChinaHatSettings.enabled and localPlayer.Character then
+            local hat = localPlayer.Character:FindFirstChild("ChinaHat")
+            if hat then hat:Destroy() end
+            CreateHat(localPlayer.Character)
+        end
+    end
+})
+
+ChinaHatGroup:AddSlider('ChinaHatScaleY', {
+    Text = "Hat Scale Y",
+    Min = 0.5,
+    Max = 3,
+    Default = getgenv().ChinaHatSettings.scale.Y,
+    Rounding = 2,
+    Compact = false,
+    Callback = function(value)
+        getgenv().ChinaHatSettings.scale = Vector3.new(getgenv().ChinaHatSettings.scale.X, value, getgenv().ChinaHatSettings.scale.Z)
+        if getgenv().ChinaHatSettings.enabled and localPlayer.Character then
+            local hat = localPlayer.Character:FindFirstChild("ChinaHat")
+            if hat then hat:Destroy() end
+            CreateHat(localPlayer.Character)
+        end
+    end
+})
+
+ChinaHatGroup:AddSlider('ChinaHatScaleZ', {
+    Text = "Hat Scale Z",
+    Min = 0.5,
+    Max = 3,
+    Default = getgenv().ChinaHatSettings.scale.Z,
+    Rounding = 2,
+    Compact = false,
+    Callback = function(value)
+        getgenv().ChinaHatSettings.scale = Vector3.new(getgenv().ChinaHatSettings.scale.X, getgenv().ChinaHatSettings.scale.Y, value)
+        if getgenv().ChinaHatSettings.enabled and localPlayer.Character then
+            local hat = localPlayer.Character:FindFirstChild("ChinaHat")
+            if hat then hat:Destroy() end
+            CreateHat(localPlayer.Character)
+        end
+    end
+})
+local MatchaEsp = loadstring(game:HttpGet('https://raw.githubusercontent.com/alebinh60/asmobile/refs/heads/main/esplib'))()
+local esp = MatchaEsp
+local ESPGroup = Tabs.Visual:AddLeftGroupbox('ESP')
+
+-- Box ESP
+ESPGroup:AddToggle('BoxESPToggle', {
+    Text = 'Box ESP',
+    Default = false,
+    Callback = function(Value)
+        esp.State.BoxEnabled = Value
+    end,
+}):AddColorPicker('BoxColorPicker', {
+    Default = Color3.new(0.403922, 0.349020, 0.701961),
+    Title = 'Box Color',
+    Callback = function(Value)
+        esp.Config.BoxColor = Value
+        for _, espObj in pairs(esp.Caches.BoxCache) do
+            espObj.Box.Color = Value
+        end
+    end,
+})
+
+-- Box Gradient Toggle
+ESPGroup:AddToggle('BoxGradientToggle', {
+    Text = 'Box Gradient',
+    Default = false,
+    Callback = function(Value)
+        esp.Config.BoxGradientEnabled = Value
+    end,
+}):AddColorPicker('BoxGradientColor1', {
+    Default = Color3.new(0.403922, 0.34902, 0.701961),
+    Title = 'Gradient Color 1',
+    Callback = function(Value)
+        esp.Config.BoxGradientColor1 = Value
+        for _, espObj in pairs(esp.Caches.BoxCache) do
+            espObj.Gradient.Color = ColorSequence.new({
+                ColorSequenceKeypoint.new(0, esp.Config.BoxGradientColor1),
+                ColorSequenceKeypoint.new(0.5, esp.Config.BoxGradientColor2),
+                ColorSequenceKeypoint.new(1, esp.Config.BoxGradientColor1)
+            })
+        end
+    end,
+}):AddColorPicker('BoxGradientColor2', {
+    Default = Color3.new(0.8, 0.4, 1),
+    Title = 'Gradient Color 2',
+    Callback = function(Value)
+        esp.Config.BoxGradientColor2 = Value
+        for _, espObj in pairs(esp.Caches.BoxCache) do
+            espObj.Gradient.Color = ColorSequence.new({
+                ColorSequenceKeypoint.new(0, esp.Config.BoxGradientColor1),
+                ColorSequenceKeypoint.new(0.5, esp.Config.BoxGradientColor2),
+                ColorSequenceKeypoint.new(1, esp.Config.BoxGradientColor1)
+            })
+        end
+    end,
+})
+
+ESPGroup:AddSlider('BoxFillTransparencySlider', {
+    Text = 'Box Fill Transparency',
+    Default = 0.5,
+    Min = 0,
+    Max = 1,
+    Rounding = 2,
+    Compact = true,
+    Callback = function(Value)
+        esp.Config.BoxFillTransparency = Value
+        for _, espObj in pairs(esp.Caches.BoxCache) do
+            espObj.FillFrame.BackgroundTransparency = Value
+        end
+    end,
+})
+
+-- Box Outline
+ESPGroup:AddToggle('BoxOutlineToggle', {
+    Text = 'Box Outline',
+    Default = true,
+    Callback = function(Value)
+        esp.Config.BoxOutlineEnabled = Value
+        for _, espObj in pairs(esp.Caches.BoxCache) do
+            espObj.Stroke.Enabled = Value
+            espObj.BoxOutline.Visible = Value and not esp.Config.BoxGradientEnabled
+        end
+    end,
+}):AddColorPicker('BoxOutlineColor', {
+    Default = Color3.new(0, 0, 0),
+    Title = 'Outline Color',
+    Callback = function(Value)
+        esp.Config.BoxOutlineColor = Value
+        for _, espObj in pairs(esp.Caches.BoxCache) do
+            espObj.Stroke.Color = Value
+            espObj.BoxOutline.Color = Value
+        end
+    end,
+})
+
+-- Ring ESP
+ESPGroup:AddToggle('RingESPToggle', {
+    Text = 'Ring ESP',
+    Default = false,
+    Callback = function(Value)
+        if Value then
+            esp:InitiateRing(Color3.new(1, 1, 1))
+        else
+            esp.State.RingEnabled = false
+        end
+    end,
+}):AddColorPicker('RingColorPicker', {
+    Default = Color3.new(1, 1, 1),
+    Title = 'Ring Color',
+    Callback = function(Value)
+        esp.Config.RingColor = Value
+        for _, data in pairs(esp.Caches.RingCache) do
+            data.Ring.Color3 = Value
+        end
+    end,
+})
+
+-- Name ESP
+ESPGroup:AddToggle('NameESPToggle', {
+    Text = 'Name ESP',
+    Default = false,
+    Callback = function(Value)
+        esp:InitiateName(Value)
+    end,
+})
+
+-- Distance ESP
+ESPGroup:AddToggle('DistanceESPToggle', {
+    Text = 'Distance ESP',
+    Default = false,
+    Callback = function(Value)
+        esp:InitiateDistance(Value)
+    end,
+})
+
+-- Skeleton ESP
+ESPGroup:AddToggle('SkeletonESPToggle', {
+    Text = 'Skeleton ESP',
+    Default = false,
+    Callback = function(Value)
+        if Value then
+            esp:InitiateSkeleton(Color3.new(0.403922, 0.349020, 0.701961))
+        else
+            esp.State.SkeletonEnabled = false
+        end
+    end,
+}):AddColorPicker('SkeletonColorPicker', {
+    Default = Color3.new(0.403922, 0.349020, 0.701961),
+    Title = 'Skeleton Color',
+    Callback = function(Value)
+        esp.Config.SkeletonColor = Value
+        for _, skeleton in pairs(esp.Caches.SkeletonCache) do
+            for _, line in pairs(skeleton) do
+                line.Color = Value
+            end
+        end
+    end,
+})
+
+-- Health Bar ESP
+ESPGroup:AddToggle('HealthBarESPToggle', {
+    Text = 'Health Bar',
+    Default = false,
+    Callback = function(Value)
+        esp.State.HealthBarEnabled = Value
+    end,
+})
+
+-- Health Text ESP
+ESPGroup:AddToggle('HealthTextESPToggle', {
+    Text = 'Health Text',
+    Default = false,
+    Callback = function(Value)
+        esp.State.HealthTextEnabled = Value
+    end,
+})
+
+-- Health Bar Lerp Speed
+ESPGroup:AddSlider('HealthBarLerpSpeed', {
+    Text = 'Health Bar Smoothness',
+    Default = 0.15,
+    Min = 0.05,
+    Max = 0.5,
+    Rounding = 2,
+    Compact = true,
+    Callback = function(Value)
+        esp.Config.HealthBarLerpSpeed = Value
+    end,
+})
+
+-- Tracer ESP
+ESPGroup:AddToggle('TracerESPToggle', {
+    Text = 'Tracer ESP',
+    Default = false,
+    Callback = function(Value)
+        if Value then
+            esp:InitiateTracer(Color3.new(0.403922, 0.349020, 0.701961), esp.Config.TracerOrigin)
+        else
+            esp.State.TracerEnabled = false
+        end
+    end,
+}):AddColorPicker('TracerColorPicker', {
+    Default = Color3.new(0.403922, 0.349020, 0.701961),
+    Title = 'Tracer Color',
+    Callback = function(Value)
+        esp.Config.TracerColor = Value
+        for _, tracer in pairs(esp.Caches.TracerCache) do
+            tracer.Color = Value
+        end
+    end,
+})
+ESPGroup:AddDropdown('TracerOriginDropdown', {
+    Text = 'Tracer Origin',
+    Default = 'Bottom Screen',
+    Values = {'Bottom Screen', 'Cursor', 'Top Screen'},
+    Compact = true,
+    Callback = function(Value)
+        esp.Config.TracerOrigin = Value
+    end,
+})
+
+-- Chams ESP
+ESPGroup:AddToggle('ChamsToggle', {
+    Text = 'Chams',
+    Default = false,
+    Callback = function(Value)
+        if Value then
+            esp:InitiateChams(Color3.new(0.403922, 0.34902, 0.701961))
+        else
+            esp.State.ChamsEnabled = false
+        end
+    end,
+}):AddColorPicker('ChamsColorPicker', {
+    Default = Color3.new(0.403922, 0.34902, 0.701961),
+    Title = 'Fill Color',
+    Callback = function(Value)
+        esp.Config.ChamsColor = Value
+        for _, chams in pairs(esp.Caches.ChamsCache) do
+            chams.FillColor = Value
+        end
+    end,
+}):AddColorPicker('ChamsOutlineColorPicker', {
+    Default = Color3.new(1, 1, 1),
+    Title = 'Outline Color',
+    Callback = function(Value)
+        esp.Config.ChamsOutlineColor = Value
+        for _, chams in pairs(esp.Caches.ChamsCache) do
+            chams.OutlineColor = Value
+        end
+    end,
+})
+ESPGroup:AddSlider('ChamFillTransparency', {
+    Text = 'Chams Transparency',
+    Default = 0.5,
+    Min = 0,
+    Max = 1,
+    Rounding = 2,
+    Compact = true,
+    Callback = function(Value)
+        esp.Config.ChamsFillTransparency = Value
+        for _, chams in pairs(esp.Caches.ChamsCache) do
+            chams.FillTransparency = Value
+        end
+    end,
+})
+
+-- Team Check
+ESPGroup:AddToggle('TeamCheckToggle', {
+    Text = 'Team Check',
+    Default = true,
+    Callback = function(Value)
+        esp:TeamCheck(Value)
+    end,
+})
+
+-- ESP Distance
+ESPGroup:AddSlider('ESPDistanceSlider', {
+    Text = 'ESP Distance',
+    Default = 1000,
+    Min = 100,
+    Max = 1000,
+    Rounding = 0,
+    Suffix = ' studs',
+    Compact = true,
+    Callback = function(Value)
+        esp:SetDistance(Value)
+    end,
+})
+
+-- Initialize ESP
+esp:Initialize()
+
+
+local SelfGroup = Tabs.Visual:AddRightGroupbox('Self')
+utility = utility or {}
+
+local Settings = {
+    Visuals = {
+        Character_Trail = {
+            Trail_Color = Color3.fromRGB(255, 255, 255),
+            Trail_Life = 1.6
+        }
+    }
+}
+Settings.Visuals.Character_Chams = {
+    Enabled = false,
+    Color = Color3.fromRGB(255, 255, 255),
+    Material = Enum.Material.ForceField
+}
+
+Settings.Visuals.Weapon_Chams = {
+    Enabled = false,
+    Color = Color3.fromRGB(255, 255, 255),
+    Material = Enum.Material.Neon
+}
+
+local function applyChams(character)
+    if Settings.Visuals.Character_Chams.Enabled and character then
+        for i, v in pairs(character:GetDescendants()) do
+            if (v.Parent:IsA('Tool') and (v:IsA('MeshPart') or v:IsA('BasePart'))) then continue end
+            if v:IsA('MeshPart') then
+                v.Material = Settings.Visuals.Character_Chams.Material
+                v.Color = Settings.Visuals.Character_Chams.Color
+                v.TextureID = ''
+            end
+            if v:IsA('BasePart') then
+                v.Material = Settings.Visuals.Character_Chams.Material
+                v.Color = Settings.Visuals.Character_Chams.Color
+            end
+        end
+    end
+    if Settings.Visuals.Weapon_Chams.Enabled and character then
+        local Gun = character:FindFirstChildOfClass("Tool")
+        if Gun then
+            for i, v in pairs(Gun:GetChildren()) do
+                if v:IsA('MeshPart') then
+                    v.Material = Settings.Visuals.Weapon_Chams.Material
+                    v.Color = Settings.Visuals.Weapon_Chams.Color
+                    v.TextureID = ''
+                end
+                if v:IsA('BasePart') then
+                    v.Material = Settings.Visuals.Weapon_Chams.Material
+                    v.Color = Settings.Visuals.Weapon_Chams.Color
+                end
+            end
+        end
+    end
+end
+local function onChamsCharacter(character)
+    task.wait(2)
+    applyChams(character)
+    character.ChildAdded:Connect(function(child)
+        if child:IsA("Tool") then
+            applyChams(character)
+        end
+    end)
+end
+
+localPlayer.CharacterAdded:Connect(onChamsCharacter)
+if localPlayer.Character then
+    onChamsCharacter(localPlayer.Character)
+end
+
+
+SelfGroup:AddToggle('WeaponChamsEnabled', {
+    Text = 'Weapon Enabled',
+    Default = false,
+    Callback = function(Value)
+        Settings.Visuals.Weapon_Chams.Enabled = Value
+        applyChams(localPlayer.Character)
+    end
+}):AddColorPicker('WeaponChamsColor', {
+    Default = Settings.Visuals.Weapon_Chams.Color,
+    Title = 'Weapon Color',
+    Callback = function(Value)
+        Settings.Visuals.Weapon_Chams.Color = Value
+        applyChams(localPlayer.Character)
+    end
+}):AddDropdown('WeaponChamsType', {
+    Values = {'Neon', 'ForceField'},
+    Default = 'Neon',
+    Multi = false,
+    Text = 'Weapon Cham Type',
+    Callback = function(Value)
+        if Value == 'Neon' then
+            Settings.Visuals.Weapon_Chams.Material = Enum.Material.Neon
+        elseif Value == 'ForceField' then
+            Settings.Visuals.Weapon_Chams.Material = Enum.Material.ForceField
+        end
+        applyChams(localPlayer.Character)
+    end
+})
+
+SelfGroup:AddToggle('ClientChamsEnabled', {
+    Text = 'Client Enabled',
+    Default = false,
+    Callback = function(Value)
+        Settings.Visuals.Character_Chams.Enabled = Value
+        applyChams(localPlayer.Character)
+    end
+}):AddColorPicker('ClientChamsColor', {
+    Default = Settings.Visuals.Character_Chams.Color,
+    Title = 'Client Color',
+    Callback = function(Value)
+        Settings.Visuals.Character_Chams.Color = Value
+        applyChams(localPlayer.Character)
+    end
+}):AddDropdown('ClientChamsType', {
+    Values = {'Force Field', 'Neon'},
+    Default = 'Force Field',
+    Multi = false,
+    Text = 'Client Cham Type',
+    Callback = function(Value)
+        if Value == 'Force Field' then
+            Settings.Visuals.Character_Chams.Material = Enum.Material.ForceField
+        elseif Value == 'Neon' then
+            Settings.Visuals.Character_Chams.Material = Enum.Material.Neon
+        end
+        applyChams(localPlayer.Character)
+    end
+})
+local function ToggleTrail(Bool)
+    for i,v in pairs(game.Players.LocalPlayer.Character:GetChildren()) do
+        if v:IsA("BasePart") then
+            if Bool then
+                local BlaBla = Instance.new("Trail", v)
+                BlaBla.Texture = "rbxassetid://1390780157"
+                BlaBla.Parent = v
+                local Pointer1 = Instance.new("Attachment", v)
+                Pointer1.Name = "Pointer1"
+                local Pointer2 = Instance.new("Attachment", game.Players.LocalPlayer.Character.HumanoidRootPart)
+                Pointer2.Name = "Pointer2"
+                BlaBla.Attachment0 = Pointer1
+                BlaBla.Attachment1 = Pointer2
+                BlaBla.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Settings.Visuals.Character_Trail.Trail_Color), ColorSequenceKeypoint.new(1, Settings.Visuals.Character_Trail.Trail_Color)});
+                BlaBla.Lifetime = Settings.Visuals.Character_Trail.Trail_Life
+                BlaBla.Name = "BlaBla" -- Set the name
+            else
+                for _, child in ipairs(v:GetChildren()) do
+                    if child:IsA("Trail") and child.Name == 'BlaBla' then -- Corrected the condition
+                        child:Destroy()
+                    end
+                end
+            end
+        end
+    end
+end
+
+localPlayer.CharacterAdded:Connect(function()
+    task.wait(2)
+    if getgenv().trailEnabled then
+        ToggleTrail(true)
+    end
+end)
+if localPlayer.Character then 
+    if getgenv().trailEnabled then
+        ToggleTrail(true)
+    end
+end
+
+SelfGroup:AddToggle("TrailToggle", {
+    Text = "Trail",
+    Default = false,
+    Callback = function(state)
+        getgenv().trailEnabled = state
+        ToggleTrail(state)
+    end
+}):AddColorPicker("TrailColor", {
+    Default = Settings.Visuals.Character_Trail.Trail_Color,
+    Title = "Trail Color",
+    Callback = function(color)
+        Settings.Visuals.Character_Trail.Trail_Color = color
+        if getgenv().trailEnabled then
+            ToggleTrail(false)
+            ToggleTrail(true)
+        end
+    end
+})
+
+SelfGroup:AddSlider("TrailLifetime", {
+    Text = "Trail Lifetime",
+    Default = 1.6,
+    Min = 0.1,
+    Max = 5,
+    Rounding = 1,
+    Callback = function(value)
+        Settings.Visuals.Character_Trail.Trail_Life = value
+        if getgenv().trailEnabled then
+            ToggleTrail(false)
+            ToggleTrail(true)
+        end
+    end
+})
+
+local BulletTracerGroup = Tabs.Visual:AddLeftGroupbox('BulletTracer')
+matchacc.BulletTracers = {
+    Enabled = false,
+    TextureID = "rbxassetid://12781852245",
+    Color = Color3.new(255, 255, 255),
+    Size = 0.4,
+    Transparency = 0,
+    TimeAlive = 3,
+}
+
+-- // Bullet Tracers
+local function bullettracerlol(startPos, endPos)
+    local startPart = Instance.new("Part")
+    startPart.Name = "BulletStart"
+    startPart.Anchored = true
+    startPart.CanCollide = false
+    startPart.Transparency = 1
+    startPart.Size = Vector3.new(0.2, 0.2, 0.2)
+    startPart.Material = Enum.Material.ForceField
+    startPart.Color = Color3.new(1, 0, 0)
+    startPart.Transparency = 1
+    startPart.CanTouch = false
+    startPart.CanQuery = false
+    startPart.Massless = true
+    startPart.CollisionGroupId = 0
+    startPart.Position = startPos
+    startPart.Parent = workspace
+
+    local endPart = Instance.new("Part")
+    endPart.Name = "BulletEnd"
+    endPart.Anchored = true
+    endPart.CanCollide = false
+    endPart.Size = Vector3.new(0.2, 0.2, 0.2)
+    endPart.Material = Enum.Material.ForceField
+    endPart.Color = Color3.new(1, 0, 0)
+    endPart.Transparency = 1
+    endPart.CanTouch = false
+    endPart.CanQuery = false
+    endPart.Massless = true
+    endPart.CollisionGroupId = 0
+    endPart.Position = endPos
+    endPart.Parent = workspace
+
+    local beam = Instance.new("Beam")
+    beam.Attachment0 = Instance.new("Attachment", startPart)
+    beam.Attachment1 = Instance.new("Attachment", endPart)
+    beam.Parent = startPart
+    beam.FaceCamera = true
+    beam.Color = ColorSequence.new(matchacc.BulletTracers.Color)
+    beam.Texture = matchacc.BulletTracers.TextureID
+    beam.LightEmission = 1
+    beam.Transparency = NumberSequence.new(matchacc.BulletTracers.Transparency)
+    beam.Width0 = matchacc.BulletTracers.Size
+    beam.Width1 = matchacc.BulletTracers.Size
+
+    task.delay(matchacc.BulletTracers.TimeAlive, function()
+        if beam and beam.Parent then
+            local tweenInfo = TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+            local tween = TweenService:Create(beam, tweenInfo, { Width0 = 0, Width1 = 0 })
+            tween:Play()
+           
+            tween.Completed:Wait()
+        end
+
+        if startPart and startPart.Parent then startPart:Destroy() end
+        if endPart and endPart.Parent then endPart:Destroy() end
+        if beam and beam.Parent then beam:Destroy() end
+    end)
+
+    return startPart, endPart, beam
+end
+
+if getnamecallmethod and MainEvent ~= nil then
+    local mt = getrawmetatable(MainEvent)
+    setreadonly(mt, false)
+           
+    local cloned_mt = table.clone(mt)
+   
+    local oldnamecall = cloned_mt.__namecall
+   
+    setrawmetatable(MainEvent, {
+        __namecall = (function(self, ...)
+            local args = { ... }
+            if getnamecallmethod() == "FireServer" then
+                if args[1] == "ShootGun" then
+   
+                    -- Bullet Tracers
+                    if matchacc.BulletTracers.Enabled then
+                        bullettracerlol(args[3], args[4])
+                    end
+   
+                end
+            end
+   
+            return oldnamecall(self, unpack(args))
+        end),
+   
+        __index = cloned_mt.__index,
+        __newindex = cloned_mt.__newindex,
+        __call = cloned_mt.__call,
+        __tostring = cloned_mt.__tostring,
+    })
+
+end
+
+BulletTracerGroup:AddToggle('BulletTracersEnabled', {
+    Text = 'Enabled',
+    Default = false,
+    Callback = function(Value)
+        matchacc.BulletTracers.Enabled = Value
+        if not getnamecallmethod then
+            Library:Notify("Your executor does not support this feature")
+        end
+    end
+}):AddColorPicker('BulletTracersColor', {
+    Default = matchacc.BulletTracers.Color,
+    Title = 'Color',
+    Callback = function(Value)
+        matchacc.BulletTracers.Color = Value
+    end
+})
+
+BulletTracerGroup:AddDropdown('BulletTracersTexture', {
+    Values = {"Beam", "Lightning", "Heartrate", "Chain", "Glitch", "Swirl"},
+    Default = "Beam",
+    Multi = false,
+    Text = 'Texture',
+    Callback = function(Value)
+        if Value == "Beam" then
+            matchacc.BulletTracers.TextureID = "rbxassetid://12781852245"
+        elseif Value == "Lightning" then
+            matchacc.BulletTracers.TextureID = "rbxassetid://446111271"
+        elseif Value == "Heartrate" then
+            matchacc.BulletTracers.TextureID = "rbxassetid://5830549480"
+        elseif Value == "Chain" then
+            matchacc.BulletTracers.TextureID = "rbxassetid://9632168658"
+        elseif Value == "Glitch" then
+            matchacc.BulletTracers.TextureID = "rbxassetid://8089467613"
+        elseif Value == "Swirl" then
+            matchacc.BulletTracers.TextureID = "rbxassetid://5638168605"
+        end
+    end
+})
+
+BulletTracerGroup:AddSlider('BulletTracersSize', {
+    Text = 'Size',
+    Default = 0.4,
+    Min = 0.1,
+    Max = 3,
+    Rounding = 2,
+    Callback = function(Value)
+        matchacc.BulletTracers.Size = Value
+    end
+})
+
+BulletTracerGroup:AddSlider('BulletTracersTransparency', {
+    Text = 'Transparency',
+    Default = 0,
+    Min = 0,
+    Max = 1,
+    Rounding = 2,
+    Callback = function(Value)
+        matchacc.BulletTracers.Transparency = Value
+    end
+})
+
+BulletTracerGroup:AddSlider('BulletTracersTimeAlive', {
+    Text = 'Time Alive',
+    Default = 3,
+    Min = 1,
+    Max = 10,
+    Rounding = 0,
+    Callback = function(Value)
+        matchacc.BulletTracers.TimeAlive = Value
+    end
+})
+local CrosshairGroup = Tabs.Visual:AddRightGroupbox('Crosshair')
+local Client = players.LocalPlayer
+local mouse = Client:GetMouse()
+
+-- Visual state storage (parameters only)
+local visualState = {
+    time = 0,
+    rotationProgress = 0,
+    currentRotationSpeed = 0.8,
+    smoothedRotation = 5,
+
+    lines = {
+        top = {Size = UDim2.new(0, 6, 0, 25), Position = UDim2.new(0.5, -1.5, 0, 0), Color = Color3.new(1,1,1)},
+        bottom = {Size = UDim2.new(0, 6, 0, 25), Position = UDim2.new(0.5, -1.5, 1, -25), Color = Color3.new(1,1,1)},
+        left = {Size = UDim2.new(0, 25, 0, 6), Position = UDim2.new(0, 0, 0.5, -1.5), Color = Color3.new(1,1,1)},
+        right = {Size = UDim2.new(0, 25, 0, 6), Position = UDim2.new(1, -25, 0.5, -1.5), Color = Color3.new(1,1,1)},
+    },
+    -- Text params
+    text = {
+        Text = "Unnamed Enhancements",
+        Position = UDim2.new(0, 0, 0, 0),
+        Color = Color3.new(1,1,1),
+        Font = Enum.Font.Arcade,
+        TextScaled = true,
+    }
+}
+
+local screenGui
+local aimContainer
+local topLine, bottomLine, leftLine, rightLine
+local textLabel
+
+local lineLength = 25
+local lineThickness = 3
+local baseRotationSpeed = 0.8
+local pulseSpeed = 2.5
+local minLength = -10
+local maxLength = -30
+
+local time = 0
+local rotationProgress = 0
+local currentRotationSpeed = baseRotationSpeed
+local smoothedRotation = 5
+
+local isCrosshairEnabled = false
+local isTextEnabled = true
+local isRainbowEnabled = false
+local fixedColor = Color3.new(1,1,1)
+
+local function createLine(parent, size, position, color)
+    local frame = Instance.new("Frame")
+    frame.Size = size
+    frame.Position = position
+    frame.BackgroundColor3 = color
+    frame.BorderSizePixel = 0
+    frame.ZIndex = 5
+    frame.Parent = parent
+
+    local stroke = Instance.new("UIStroke")
+    stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    stroke.Color = Color3.new(0,0,0)
+    stroke.Thickness = 1
+    stroke.Parent = frame
+
+    return frame
+end
+
+-- Helper to create text with outline
+local function createTextLabel(parent, text, position, color, font, scaled)
+    local label = Instance.new("TextLabel")
+    label.Text = text
+    label.Position = position
+    label.TextColor3 = color
+    label.Font = font
+    label.TextScaled = scaled
+    label.BackgroundTransparency = 1
+    label.Size = UDim2.new(0, 150, 0, 23)
+    label.ZIndex = 10
+    label.Parent = parent
+
+    local stroke = Instance.new("UIStroke")
+    stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual
+    stroke.Color = Color3.new(0,0,0)
+    stroke.Thickness = 1
+    stroke.LineJoinMode = Enum.LineJoinMode.Round
+    stroke.Parent = label
+
+    return label
+end
+
+-- Clear previous GUI if exists
+local function clearGui()
+    if screenGui then
+        screenGui:Destroy()
+        screenGui = nil
+    end
+end
+
+-- Create GUI elements fresh and restore from visualState parameters
+local function createGui()
+    clearGui()
+
+    screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "AimSightGUI"
+    screenGui.ResetOnSpawn = false
+    screenGui.Parent = Client:WaitForChild("PlayerGui")
+
+    aimContainer = Instance.new("Frame")
+    aimContainer.BackgroundTransparency = 1
+    aimContainer.Size = UDim2.new(0, 25, 0, 25)
+    aimContainer.AnchorPoint = Vector2.new(0.5, 0.5)
+    aimContainer.Parent = screenGui
+
+    -- Create lines with saved params
+    topLine = createLine(aimContainer, visualState.lines.top.Size, visualState.lines.top.Position, visualState.lines.top.Color)
+    bottomLine = createLine(aimContainer, visualState.lines.bottom.Size, visualState.lines.bottom.Position, visualState.lines.bottom.Color)
+    leftLine = createLine(aimContainer, visualState.lines.left.Size, visualState.lines.left.Position, visualState.lines.left.Color)
+    rightLine = createLine(aimContainer, visualState.lines.right.Size, visualState.lines.right.Position, visualState.lines.right.Color)
+
+    -- Create text label with saved params
+    textLabel = createTextLabel(screenGui, visualState.text.Text, visualState.text.Position, visualState.text.Color, visualState.text.Font, visualState.text.TextScaled)
+    textLabel.Visible = isTextEnabled
+end
+
+local function saveVisualState()
+    visualState.time = time
+    visualState.rotationProgress = rotationProgress
+    visualState.currentRotationSpeed = currentRotationSpeed
+    visualState.smoothedRotation = smoothedRotation
+
+    visualState.lines.top.Size = topLine.Size
+    visualState.lines.top.Position = topLine.Position
+    visualState.lines.top.Color = topLine.BackgroundColor3
+
+    visualState.lines.bottom.Size = bottomLine.Size
+    visualState.lines.bottom.Position = bottomLine.Position
+    visualState.lines.bottom.Color = bottomLine.BackgroundColor3
+
+    visualState.lines.left.Size = leftLine.Size
+    visualState.lines.left.Position = leftLine.Position
+    visualState.lines.left.Color = leftLine.BackgroundColor3
+
+    visualState.lines.right.Size = rightLine.Size
+    visualState.lines.right.Position = rightLine.Position
+    visualState.lines.right.Color = rightLine.BackgroundColor3
+
+    visualState.text.Text = textLabel.Text
+    visualState.text.Position = textLabel.Position
+    visualState.text.Color = textLabel.TextColor3
+    visualState.text.Font = textLabel.Font
+    visualState.text.TextScaled = textLabel.TextScaled
+end
+
+
+local function restoreVisualState()
+    if not (topLine and bottomLine and leftLine and rightLine and textLabel) then
+        return
+    end
+
+    time = visualState.time or 0
+    rotationProgress = visualState.rotationProgress or 0
+    currentRotationSpeed = visualState.currentRotationSpeed or baseRotationSpeed
+    smoothedRotation = visualState.smoothedRotation or 5
+
+    topLine.Size = visualState.lines.top.Size or topLine.Size
+    topLine.Position = visualState.lines.top.Position or topLine.Position
+    topLine.BackgroundColor3 = visualState.lines.top.Color or topLine.BackgroundColor3
+
+    bottomLine.Size = visualState.lines.bottom.Size or bottomLine.Size
+    bottomLine.Position = visualState.lines.bottom.Position or bottomLine.Position
+    bottomLine.BackgroundColor3 = visualState.lines.bottom.Color or bottomLine.BackgroundColor3
+
+    leftLine.Size = visualState.lines.left.Size or leftLine.Size
+    leftLine.Position = visualState.lines.left.Position or leftLine.Position
+    leftLine.BackgroundColor3 = visualState.lines.left.Color or leftLine.BackgroundColor3
+
+    rightLine.Size = visualState.lines.right.Size or rightLine.Size
+    rightLine.Position = visualState.lines.right.Position or rightLine.Position
+    rightLine.BackgroundColor3 = visualState.lines.right.Color or rightLine.BackgroundColor3
+
+    textLabel.Text = visualState.text.Text or textLabel.Text
+    textLabel.Position = visualState.text.Position or textLabel.Position
+    textLabel.TextColor3 = visualState.text.Color or textLabel.TextColor3
+    textLabel.Font = visualState.text.Font or textLabel.Font
+    textLabel.TextScaled = visualState.text.TextScaled or textLabel.TextScaled
+end
+
+-- Function to get rainbow color by time
+local function getRainbowColor(t)
+    local r = math.sin(t * 0.6) * 0.5 + 0.5
+    local g = math.sin(t * 0.6 + 2) * 0.5 + 0.5
+    local b = math.sin(t * 0.6 + 4) * 0.5 + 0.5
+    return Color3.new(r, g, b)
+end
+
+local function calculateRotationSpeed(progress)
+    local slowdownStart = 0.6
+    local slowdownDuration = 0.35
+    local minSlowdownSpeed = 0.3
+    local baseRotationSpeedLocal = baseRotationSpeed
+
+    if progress >= slowdownStart then
+        local slowdownProgress = (progress - slowdownStart) / slowdownDuration
+        local easedProgress = slowdownProgress * slowdownProgress
+        local slowdownFactor = 1 - (easedProgress * (1 - minSlowdownSpeed))
+        return baseRotationSpeedLocal * math.max(slowdownFactor, minSlowdownSpeed)
+    else
+        return baseRotationSpeedLocal
+    end
+end
+
+local function smoothRotation(currentRot, targetRot, smoothing)
+    return currentRot + (targetRot - currentRot) * smoothing
+end
+
+local function smoothPulse(t, speed)
+    local rawPulse = math.sin(t * speed) * 0.5 + 0.5
+    return rawPulse * rawPulse
+end
+
+-- On character added, recreate GUI and restore state
+local function onCharacterAdded(character)
+    if isCrosshairEnabled then
+        createGui()
+        restoreVisualState()
+    end
+
+    local humanoid = character:WaitForChild("Humanoid")
+    humanoid.Died:Connect(function()
+        saveVisualState()
+    end)
+end
+
+Client.CharacterAdded:Connect(onCharacterAdded)
+
+if Client.Character then
+    onCharacterAdded(Client.Character)
+end
+
+RunService.RenderStepped:Connect(function(deltaTime)
+    if not (aimContainer and topLine and bottomLine and leftLine and rightLine and textLabel) then
+        return
+    end
+
+    time = time + deltaTime
+
+    aimContainer.Position = UDim2.new(0, mouse.X, 0, mouse.Y)
+    textLabel.Position = UDim2.new(0, mouse.X - 70, 0, mouse.Y + 50)
+
+    rotationProgress = (rotationProgress + currentRotationSpeed * deltaTime) % 1
+    currentRotationSpeed = calculateRotationSpeed(rotationProgress)
+
+    local targetRotation = rotationProgress * 360
+    smoothedRotation = smoothRotation(smoothedRotation, targetRotation, 1)
+    aimContainer.Rotation = smoothedRotation
+
+    local pulse = smoothPulse(time, pulseSpeed)
+    local currentLength = minLength + (maxLength - minLength) * pulse
+
+    topLine.Size = UDim2.new(0, lineThickness, 0, currentLength)
+    bottomLine.Size = UDim2.new(0, lineThickness, 0, currentLength)
+    leftLine.Size = UDim2.new(0, currentLength, 0, lineThickness)
+    rightLine.Size = UDim2.new(0, currentLength, 0, lineThickness)
+
+    topLine.Position = UDim2.new(0.5, -lineThickness / 2, 0, 0)
+    bottomLine.Position = UDim2.new(0.5, -lineThickness / 2, 1, -currentLength)
+    leftLine.Position = UDim2.new(0, 0, 0.5, -lineThickness / 2)
+    rightLine.Position = UDim2.new(1, -currentLength, 0.5, -lineThickness / 2)
+    local color = isRainbowEnabled and getRainbowColor(time) or fixedColor
+
+    topLine.BackgroundColor3 = color
+    bottomLine.BackgroundColor3 = color
+    leftLine.BackgroundColor3 = color
+    rightLine.BackgroundColor3 = color
+
+    textLabel.TextColor3 = color
+end)
+CrosshairGroup:AddToggle('CrosshairEnabled', {
+    Text = 'Enabled',
+    Default = false,
+    Callback = function(Value)
+        isCrosshairEnabled = Value
+        if Value then
+            createGui()
+            restoreVisualState()
+        else
+            clearGui()
+        end
+    end
+}):AddColorPicker('CrosshairColor', {
+    Default = Color3.fromRGB(255, 255, 255),
+    Title = 'Color',
+    Callback = function(Value)
+        fixedColor = Value
+        if not isRainbowEnabled and topLine and bottomLine and leftLine and rightLine and textLabel then
+            topLine.BackgroundColor3 = Value
+            bottomLine.BackgroundColor3 = Value
+            leftLine.BackgroundColor3 = Value
+            rightLine.BackgroundColor3 = Value
+            textLabel.TextColor3 = Value
+        end
+    end
+})
+
+CrosshairGroup:AddToggle('CrosshairText', {
+    Text = 'Text',
+    Default = true,
+    Callback = function(Value)
+        isTextEnabled = Value
+        if textLabel then
+            textLabel.Visible = Value
+        end
+    end
+})
+
+CrosshairGroup:AddSlider('CrosshairSpinSpeed', {
+    Text = 'Spin Speed',
+    Default = 0.8,
+    Min = 0.1,
+    Max = 2,
+    Rounding = 2,
+    Callback = function(Value)
+        baseRotationSpeed = Value
+    end
+})
+
+CrosshairGroup:AddToggle('CrosshairRainbow', {
+    Text = 'Rainbow',
+    Default = false,
+    Callback = function(Value)
+        isRainbowEnabled = Value
+    end
+})
+local RainGroup = Tabs.Visual:AddRightGroupbox('Rain')
+
+getgenv().RainSettings = {
+    Enabled = false,
+    Color = Color3.fromRGB(255, 255, 255),
+    Lifetime = 5,
+    Rate = 1000,
+    Speed = 100,
+}
+getgenv().SnowSettings = {
+    Enabled = false,
+    Color = Color3.fromRGB(255, 255, 255),
+    Lifetime = 100,  -- Default max lifetime, min fixed at 5 as per XML
+    Rate = 100,
+    Speed = 10,
+}
+local rainPart = nil
+local rainEmitter = nil
+local rainConnection = nil
+local snowPart = nil
+local snowEmitter = nil
+local snowConnection = nil
+local function rainParticleEmitter()
+    if rainPart then
+        rainPart:Destroy()
+        rainPart = nil
+        rainEmitter = nil
+    end
+
+    rainPart = Instance.new("Part")
+    rainPart.Size = Vector3.new(51.8, 0.001, 52.084)
+    rainPart.CanCollide = false
+    rainPart.Anchored = true
+    rainPart.Transparency = 1
+    rainPart.Parent = workspace
+
+    rainEmitter = Instance.new("ParticleEmitter")
+    rainEmitter.Color = ColorSequence.new(RainSettings.Color)
+    rainEmitter.LightEmission = 1
+    rainEmitter.Orientation = Enum.ParticleOrientation.FacingCameraWorldUp
+    rainEmitter.Size = NumberSequence.new(0.4)
+    rainEmitter.Squash = NumberSequence.new(4)
+    rainEmitter.Texture = "rbxasset://textures/particles/sparkles_main.dds"
+    rainEmitter.EmissionDirection = Enum.NormalId.Bottom
+    rainEmitter.Lifetime = NumberRange.new(RainSettings.Lifetime)
+    rainEmitter.Rate = RainSettings.Rate
+    rainEmitter.Speed = NumberRange.new(RainSettings.Speed)
+    rainEmitter.LockedToPart = true
+    rainEmitter.Enabled = true
+    rainEmitter.Parent = rainPart
+end
+local function snowParticleEmitter()
+    if snowPart then
+        snowPart:Destroy()
+        snowPart = nil
+        snowEmitter = nil
+    end
+
+    snowPart = Instance.new("Part")
+    snowPart.Name = "SnowEmitterPart"
+    snowPart.Size = Vector3.new(51.8, 0.001, 52.084)
+    snowPart.Anchored = true
+    snowPart.CanCollide = false
+    snowPart.CanQuery = true
+    snowPart.CanTouch = true
+    snowPart.CastShadow = true
+    snowPart.CollisionGroup = "Default"
+    snowPart.CollisionGroupId = 0
+    snowPart.Material = Enum.Material.Plastic
+    snowPart.PivotOffset = CFrame.new(0,0,0)
+    snowPart.Reflectance = 0
+    snowPart.RootPriority = 0
+    snowPart.RotVelocity = Vector3.new(0,0,0)
+    snowPart.Transparency = 1
+    snowPart.Velocity = Vector3.new(0,0,0)
+    snowPart.Parent = workspace
+
+    snowEmitter = Instance.new("ParticleEmitter")
+    snowEmitter.Acceleration = Vector3.new(0,0,0)
+    snowEmitter.Brightness = 1
+    snowEmitter.Color = ColorSequence.new(SnowSettings.Color)
+    snowEmitter.Drag = 0
+    snowEmitter.EmissionDirection = Enum.NormalId.Bottom
+    snowEmitter.Enabled = true
+    snowEmitter.FlipbookFramerate = NumberRange.new(1,1)
+    snowEmitter.FlipbookLayout = Enum.ParticleFlipbookLayout.None
+    snowEmitter.FlipbookMode = Enum.ParticleFlipbookMode.Loop
+    snowEmitter.Lifetime = NumberRange.new(5, 100)  -- Min 5, Max from settings
+    snowEmitter.LightEmission = 0
+    snowEmitter.LightInfluence = 0
+    snowEmitter.LockedToPart = false
+    snowEmitter.Orientation = Enum.ParticleOrientation.FacingCamera
+    snowEmitter.Rate = SnowSettings.Rate
+    snowEmitter.RotSpeed = NumberRange.new(360,360)
+    snowEmitter.Rotation = NumberRange.new(20,20)
+    snowEmitter.Shape = Enum.ParticleEmitterShape.Box
+    snowEmitter.ShapeInOut = Enum.ParticleEmitterShapeInOut.Outward
+    snowEmitter.ShapePartial = 1
+    snowEmitter.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
+    snowEmitter.Size = NumberSequence.new(0.2)
+    snowEmitter.Speed = NumberRange.new(SnowSettings.Speed)
+    snowEmitter.SpreadAngle = Vector2.new(500,500)
+    snowEmitter.Squash = NumberSequence.new(0)
+    snowEmitter.Texture = "rbxassetid://118641183"
+    snowEmitter.TimeScale = 1
+    snowEmitter.Transparency = NumberSequence.new(0.2)
+    snowEmitter.VelocityInheritance = 0
+    snowEmitter.WindAffectsDrag = false
+    snowEmitter.ZOffset = 0
+    snowEmitter.Parent = snowPart
+end
+RainGroup:AddToggle('RainEnabled', {
+    Text = 'Enabled',
+    Default = false,
+    Callback = function(Value)
+        RainSettings.Enabled = Value
+        if Value then
+            rainParticleEmitter()
+            rainConnection = RunService.Heartbeat:Connect(function()
+			    local camPos = Camera.CFrame.Position
+			    rainPart.CFrame = CFrame.new(camPos + Vector3.new(0, 30, 0))
+            end)
+        else
+            if rainConnection then
+                rainConnection:Disconnect()
+                rainConnection = nil
+            end
+            if rainPart then
+                rainPart:Destroy()
+                rainPart = nil
+                rainEmitter = nil
+            end
+        end
+    end
+}):AddColorPicker('RainColor', {
+    Default = RainSettings.Color,
+    Title = 'Rain Color',
+    Callback = function(Value)
+        RainSettings.Color = Value
+        if RainSettings.Enabled then
+            rainParticleEmitter()
+        end
+    end
+})
+
+RainGroup:AddInput('RainLifetime', {
+    Default = tostring(RainSettings.Lifetime),
+    Numeric = true,
+    Finished = true,
+    Text = 'Lifetime',
+    Callback = function(Value)
+        local num = tonumber(Value)
+        if num then
+            RainSettings.Lifetime = num
+            if RainSettings.Enabled then
+                rainParticleEmitter()
+            end
+        end
+    end
+})
+
+RainGroup:AddSlider('RainRate', {
+    Text = 'Amount',
+    Default = RainSettings.Rate,
+    Min = 1,
+    Max = 10000,
+    Rounding = 0,
+    Callback = function(Value)
+        RainSettings.Rate = Value
+        if RainSettings.Enabled then
+            rainParticleEmitter()
+        end
+    end
+})
+
+RainGroup:AddSlider('RainSpeed', {
+    Text = 'Speed',
+    Default = RainSettings.Speed,
+    Min = 10,
+    Max = 1000,
+    Rounding = 0,
+    Callback = function(Value)
+        RainSettings.Speed = Value
+        if RainSettings.Enabled then
+            rainParticleEmitter()
+        end
+    end
+})
+RainGroup:AddToggle('SnowEnabled', {
+    Text = 'Snow Enabled',
+    Default = false,
+    Callback = function(Value)
+        SnowSettings.Enabled = Value
+        if Value then
+            snowParticleEmitter()
+            snowConnection = RunService.Heartbeat:Connect(function()
+                local camPos = Camera.CFrame.Position
+                snowPart.CFrame = CFrame.new(camPos + Vector3.new(0, 5, 0))
+            end)
+        else
+            if snowConnection then
+                snowConnection:Disconnect()
+                snowConnection = nil
+            end
+            if snowPart then
+                snowPart:Destroy()
+                snowPart = nil
+                snowEmitter = nil
+            end
+        end
+    end
+}):AddColorPicker('SnowColor', {
+    Default = SnowSettings.Color,
+    Title = 'Snow Color',
+    Callback = function(Value)
+        SnowSettings.Color = Value
+        if SnowSettings.Enabled then
+            snowParticleEmitter()
+        end
+    end
+})
+
+RainGroup:AddSlider('SnowRate', {
+    Text = 'Snow Amount',
+    Default = SnowSettings.Rate,
+    Min = 1,
+    Max = 1000,
+    Rounding = 0,
+    Callback = function(Value)
+        SnowSettings.Rate = Value
+        if SnowSettings.Enabled then
+            snowParticleEmitter()
+        end
+    end
+})
+
+RainGroup:AddSlider('SnowSpeed', {
+    Text = 'Snow Speed',
+    Default = SnowSettings.Speed,
+    Min = 1,
+    Max = 1000,
+    Rounding = 0,
+    Callback = function(Value)
+        SnowSettings.Speed = Value
+        if SnowSettings.Enabled then
+            snowParticleEmitter()
+        end
+    end
+})
+coroutine.wrap(function()
+local MovementGroup = Tabs.Character:AddLeftGroupbox('Movement')
+
+matchacc.Movement = {
+    Speed = {
+        Enabled = false,
+        Keybind = false,
+        Speed = 20,
+    },
+    Fly = {
+        Enabled = false,
+        Keybind = false,
+        Speed = 20,
+    },
+}
+
+MovementGroup:AddToggle('SpeedEnabled', {
+    Text = 'Speed Enabled',
+    Default = false,
+    Callback = function(Value)
+        matchacc.Movement.Speed.Enabled = Value
+    end
+}):AddKeyPicker('SpeedKey', {
+    Default = 'none',
+    SyncToggleState = true,
+    Mode = 'Toggle',
+    Text = 'Speed Key',
+    Callback = function(Value)
+        matchacc.Movement.Speed.Keybind = Value
+    end
+})
+
+MovementGroup:AddSlider('SpeedValue', {
+    Text = 'Speed',
+    Default = 20,
+    Min = 1,
+    Max = 100,
+    Rounding = 0,
+    Callback = function(Value)
+        matchacc.Movement.Speed.Speed = Value
+    end
+})
+
+MovementGroup:AddToggle('FlyEnabled', {
+    Text = 'Fly Cframe',
+    Default = false,
+    Callback = function(Value)
+        matchacc.Movement.Fly.Enabled = Value
+    end
+}):AddKeyPicker('FlyKey', {
+    Default = 'none',
+    SyncToggleState = true,
+    Mode = 'Toggle',
+    Text = 'Fly Key',
+    Callback = function(Value)
+        matchacc.Movement.Fly.Keybind = Value
+    end
+})
+
+MovementGroup:AddSlider('FlySpeed', {
+    Text = 'Fly Speed',
+    Default = 20,
+    Min = 1,
+    Max = 100,
+    Rounding = 0,
+    Callback = function(Value)
+        matchacc.Movement.Fly.Speed = Value
+    end
+})
+getgenv().FlySpeed = 150
+getgenv().FlightEnabled = false
+getgenv().Flying = false
+local IdleAnim = Instance.new("Animation")
+IdleAnim.AnimationId = "rbxassetid://3541114300"
+
+local IdleTrack, FlyTrack
+local FlyAnim = Instance.new("Animation")
+FlyAnim.AnimationId = "rbxassetid://3541044388"
+local function CreateCore()
+    if workspace:FindFirstChild("Core") then workspace.Core:Destroy() end
+    local Core = Instance.new("Part")
+    Core.Name = "Core"
+    Core.Size = Vector3.new(0.05, 0.05, 0.05)
+    Core.CanCollide = false
+    Core.Transparency = 1
+    Core.Parent = workspace
+
+    local Weld = Instance.new("Weld", Core)
+    Weld.Part0 = Core
+    Weld.Part1 = localPlayer.Character.HumanoidRootPart
+    Weld.C0 = CFrame.new(0, 0, 0)
+    return Core
+end
+
+local currentMove = Vector3.zero
+
+-- Kiểm tra có đang di chuyển không
+local function IsMoving()
+    return currentMove.Magnitude > 0.1
+end
+
+local function StartFly()
+    if getgenv().Flying or not localPlayer.Character or not localPlayer.Character:FindFirstChild("HumanoidRootPart") then return end
+    getgenv().Flying = true
+
+    local hum = localPlayer.Character:FindFirstChildOfClass("Humanoid")
+    hum.PlatformStand = true
+
+    -- Load animations
+    IdleTrack = hum:LoadAnimation(IdleAnim)
+    FlyTrack = hum:LoadAnimation(FlyAnim)
+
+    IdleTrack:Play()
+
+    local Core = CreateCore()
+
+    local BV = Instance.new("BodyVelocity", Core)
+    BV.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+    BV.Velocity = Vector3.zero
+
+    local BG = Instance.new("BodyGyro", Core)
+    BG.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
+    BG.P = 9e4
+    BG.CFrame = Core.CFrame
+
+    local connection
+    connection = RunService.RenderStepped:Connect(function()
+        if not getgenv().Flying then connection:Disconnect() return end
+        
+        local camera = Camera
+        currentMove = Vector3.zero
+
+        if UserInputService:IsKeyDown(Enum.KeyCode.W) then currentMove += camera.CFrame.LookVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.S) then currentMove -= camera.CFrame.LookVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.A) then currentMove -= camera.CFrame.RightVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.D) then currentMove += camera.CFrame.RightVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.Space) then currentMove += Vector3.new(0, 1, 0) end
+        if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then currentMove -= Vector3.new(0, 1, 0) end
+
+        BV.Velocity = currentMove * getgenv().FlySpeed
+        BG.CFrame = camera.CFrame
+
+        -- Animation switching
+        if IsMoving() then
+            if IdleTrack.IsPlaying then IdleTrack:Stop() end
+            if not FlyTrack.IsPlaying then FlyTrack:Play() end
+        else
+            if FlyTrack.IsPlaying then FlyTrack:Stop() end
+            if not IdleTrack.IsPlaying then IdleTrack:Play() end
+        end
+    end)
+end
+
+local function StopFly()
+    if not getgenv().Flying then return end
+    getgenv().Flying = false
+
+    local hum = localPlayer.Character:FindFirstChildOfClass("Humanoid")
+    hum.PlatformStand = false
+
+    if IdleTrack then IdleTrack:Stop() end
+    if FlyTrack then FlyTrack:Stop() end
+
+    if workspace:FindFirstChild("Core") then
+        workspace.Core:Destroy()
+    end
+end
+-- Nút bật/tắt Fly V2
+MovementGroup:AddToggle('FlightV2_Enabled', {
+    Text = 'Fly Velocity + superhero',
+    Default = false,
+    Callback = function(value)
+        getgenv().FlightEnabled = value
+        if not value then
+            StopFly()
+        end
+    end
+}):AddKeyPicker('FlightV2_Keybind', {
+    Default = 'none',
+    SyncToggleState = true,
+    Mode = 'Toggle',
+    Text = 'Fly V2 Keybind',
+    Callback = function(state)
+        if UserInputService:GetFocusedTextBox() then return end
+        if state and getgenv().FlightEnabled then
+            StartFly()
+        else
+            StopFly()
+        end
+    end
+})
+
+-- Slider tốc độ bay
+MovementGroup:AddSlider('FlightV2_Speed', {
+    Text = 'Fly Speed',
+    Default = 150,
+    Min = 10,
+    Max = 1000,
+    Rounding = 0,
+    Callback = function(value)
+        getgenv().FlySpeed = value
+    end
+})
+
+-- Reset khi respawn (đã có sẵn trong script gốc, chỉ cần thêm StopFly)
+localPlayer.CharacterAdded:Connect(function()
+    task.wait(1)
+    StopFly() -- Dừng bay khi respawn
+    if getgenv().FlightEnabled then
+        -- Tự động bật lại nếu toggle vẫn đang bật
+        task.wait(2)
+        if getgenv().FlightEnabled then
+            StartFly()
+        end
+    end
+end)
+
+getgenv().Matcha.BunnyHop = {
+    Enabled = false,
+    Keybind = false,
+    Speed = 100
+}
+MovementGroup:AddToggle('BunnyHop_Enabled', {
+    Text = 'Bunny Hop',
+    Default = false,
+    Callback = function(value)
+        getgenv().Matcha.BunnyHop.Enabled = value
+    end
+}):AddKeyPicker('BunnyHop_Keybind', {
+    Default = 'None',
+    SyncToggleState = true,
+    Mode = 'Toggle',
+    Text = 'Bunny Hop Keybind',
+    Callback = function(state)
+        getgenv().Matcha.BunnyHop.Keybind = state
+    end
+})
+
+MovementGroup:AddSlider('BunnyHop_Speed', {
+    Text = 'Bunny Hop Speed',
+    Default = 100,
+    Min = 1,
+    Max = 200,
+    Rounding = 0,
+    Callback = function(value)
+        getgenv().Matcha.BunnyHop.Speed = value
+    end
+})
+
+-- Logic Bunny Hop (chạy liên tục)
+RunService.RenderStepped:Connect(function()
+    if not getgenv().Matcha.BunnyHop.Enabled or not getgenv().Matcha.BunnyHop.Keybind then return end
+    if not localPlayer.Character or not localPlayer.Character:FindFirstChild("Humanoid") or not localPlayer.Character:FindFirstChild("HumanoidRootPart") then return end
+
+    local hum = localPlayer.Character:FindFirstChildOfClass("Humanoid")
+    local hrp = localPlayer.Character.HumanoidRootPart
+    local camera = Camera
+
+    if UserInputService:IsKeyDown(Enum.KeyCode.Space) and hum.FloorMaterial ~= Enum.Material.Air then
+        hum.Jump = true
+
+        local look = camera.CFrame.LookVector * Vector3.new(1, 0, 1)
+        local move = Vector3.zero
+
+        if UserInputService:IsKeyDown(Enum.KeyCode.W) then move += look end
+        if UserInputService:IsKeyDown(Enum.KeyCode.S) then move -= look end
+        if UserInputService:IsKeyDown(Enum.KeyCode.D) then move += Vector3.new(-look.Z, 0, look.X) end
+        if UserInputService:IsKeyDown(Enum.KeyCode.A) then move += Vector3.new(look.Z, 0, -look.X) end
+
+        if move.Magnitude > 0 then
+            local speed = getgenv().Matcha.BunnyHop.Speed
+            hrp.Velocity = Vector3.new(move.Unit.X * speed, hrp.Velocity.Y, move.Unit.Z * speed)
+        end
+    end
+end)
+
+getgenv().Matcha.SpinBot = {
+    Enabled = false,
+    Speed = 500
+}
+
+MovementGroup:AddToggle('SpinBot_Enabled', {
+    Text = 'SpinBot',
+    Default = false,
+    Callback = function(value)
+        getgenv().Matcha.SpinBot.Enabled = value
+    end
+}):AddKeyPicker('SpinBot_Keybind', {
+    Default = 'none',
+    SyncToggleState = true,
+    Mode = 'Toggle',
+    Text = 'SpinBot Keybind',
+
+})
+
+MovementGroup:AddSlider('SpinBot_Speed', {
+    Text = 'Spin Speed',
+    Default = 500,
+    Min = 1,
+    Max = 10000,
+    Rounding = 0,
+    Callback = function(value)
+        getgenv().Matcha.SpinBot.Speed = value
+    end
+})
+
+RunService.Heartbeat:Connect(function(dt)
+    if not getgenv().Matcha.SpinBot.Enabled then
+        local character = localPlayer.Character
+        if character and character:FindFirstChild("Humanoid") then
+            character.Humanoid.AutoRotate = true
+        end
+        return
+    end
+
+    local character = localPlayer.Character
+    if not character then return end
+    local humanoid = character:FindFirstChild("Humanoid")
+    local hrp = character:FindFirstChild("HumanoidRootPart")
+    if not hrp or not humanoid then return end
+
+    humanoid.AutoRotate = false
+    local spinSpeed = getgenv().Matcha.SpinBot.Speed or 300  
+    hrp.CFrame = hrp.CFrame * CFrame.Angles(0, math.rad(spinSpeed), 0)  
+end)
+
+-- Reset khi character respawn (thêm vào CharacterAdded)
+localPlayer.CharacterAdded:Connect(function(char)
+    StopFly()  -- Reset fly nếu đang bật
+    task.wait(1)  -- Chờ character load
+    if matchacc.Movement.FlyEnabled then StartFly() end
+end)
+-- Integrate Movement Logic into Heartbeat
+RunService.Heartbeat:Connect(function(dt)
+    -- Speed
+    if matchacc.Movement.Speed.Enabled and matchacc.Movement.Speed.Keybind then
+        if localPlayer and localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart") then
+            local move_direction = localPlayer.Character.Humanoid.MoveDirection
+            local hrp = localPlayer.Character.HumanoidRootPart
+            hrp.CFrame = hrp.CFrame + (move_direction * dt) * matchacc.Movement.Speed.Speed * 10
+        end
+    end
+    
+    -- Fly
+    if matchacc.Movement.Fly.Enabled and matchacc.Movement.Fly.Keybind then
+        if localPlayer and localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart") then
+            local move_direction = localPlayer.Character.Humanoid.MoveDirection
+            local hrp = localPlayer.Character.HumanoidRootPart
+            local add = Vector3.new(0, (UserInputService:IsKeyDown(Enum.KeyCode.Space) and matchacc.Movement.Fly.Speed / 8 or UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) and -matchacc.Movement.Fly.Speed / 8) or 0, 0)
+            hrp.CFrame = hrp.CFrame + (move_direction * dt) * matchacc.Movement.Fly.Speed * 10
+            hrp.CFrame = hrp.CFrame + add
+            hrp.Velocity = (hrp.Velocity * Vector3.new(1, 0, 1)) + Vector3.new(0, 1.9, 0)
+        end
+    end
+end) 
+local Mouse = LocalPlayer:GetMouse()
+local Stats = game:GetService("Stats")
+
+-- Ping Sets Table (exactly như yêu cầu)
+local PingPredTable = {
+    [50] = 0.1433,
+    [55] = 0.1412,
+    [60] = 0.1389,
+    [65] = 0.1367,
+    [70] = 0.1346,
+    [75] = 0.1324,
+    [80] = 0.1303,
+    [85] = 0.1282,
+    [90] = 0.1261,
+    [95] = 0.1240,
+    [100] = 0.1219,
+    [105] = 0.1198,
+    [110] = 0.1177,
+    [115] = 0.1157,
+    [120] = 0.1136,
+    [125] = 0.1116,
+    [130] = 0.1095,
+    [135] = 0.1075,
+    [140] = 0.1055,
+    [145] = 0.1035,
+    [150] = 0.1015,
+    [155] = 0.0995,
+    [160] = 0.0975,
+    [165] = 0.0956,
+    [170] = 0.0936,
+    [175] = 0.0917,
+    [180] = 0.0897,
+    [185] = 0.0878,
+    [190] = 0.0859,
+    [195] = 0.0840,
+    [200] = 0.0821,
+    [205] = 0.0802,
+    [210] = 0.0783,
+    [215] = 0.0765,
+    [220] = 0.0746,
+    [225] = 0.0728,
+    [230] = 0.0710,
+    [235] = 0.0692,
+    [240] = 0.0674,
+    [245] = 0.0656,
+    [250] = 0.0638,
+    [255] = 0.0620,
+    [260] = 0.0603,
+    [265] = 0.0585,
+    [270] = 0.0568,
+    [275] = 0.0551,
+    [280] = 0.0534,
+    [285] = 0.0517,
+    [290] = 0.0500,
+}
+
+-- Current prediction variable (for Ping Sets mode)
+local currentPred = 0
+
+-- Update currentPred dựa trên ping hiện tại (chạy liên tục)
+task.spawn(function()
+    while true do
+        local ping = Stats.Network.ServerStatsItem["Data Ping"]:GetValue()
+        local closest = 100 -- fallback
+        local minDiff = math.huge
+        for p, _ in pairs(PingPredTable) do
+            local diff = math.abs(p - ping)
+            if diff < minDiff then
+                minDiff = diff
+                closest = p
+            end
+        end
+        currentPred = PingPredTable[closest] or 0.13
+        task.wait(0.3)
+    end
+end)
+
+-- Velocity Resolver Tracker (cực kỳ chính xác, dùng cho Calculate mode + Resolver)
+local VelocityTracker = {}
+RunService.Heartbeat:Connect(function(dt)
+    if dt > 0.5 then return end
+    for _, plr in Players:GetPlayers() do
+        if plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
+            local hrp = plr.Character.HumanoidRootPart
+            if not VelocityTracker[plr] then
+                VelocityTracker[plr] = {PreviousPos = hrp.Position, PreviousTime = tick()}
+            end
+            local track = VelocityTracker[plr]
+            local velocity = (hrp.Position - track.PreviousPos) / (tick() - track.PreviousTime)
+            track.Velocity = velocity
+            track.PreviousPos = hrp.Position
+            track.PreviousTime = tick()
+        end
+    end
+end)
+if getnamecallmethod then
+local Meta = getrawmetatable(game)
+local backupindex = Meta.__index
+setreadonly(Meta, false)
+
+Meta.__index = function(t, k)
+    if t == Mouse and (k == "Hit" or k == "hit") then
+        if matchacc.TargetAim.Enabled and matchacc.TargetAim.Target ~= "None" and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+            local TargetPlayer = Players:FindFirstChild(matchacc.TargetAim.Target)
+            if TargetPlayer and TargetPlayer.Character and TargetPlayer.Character:FindFirstChild("Humanoid") and TargetPlayer.Character.Humanoid.Health > 0 and not TargetPlayer.Character:FindFirstChild("ForceField") then
+                
+                -- Team check
+                if matchacc.Checks.Team and TargetPlayer.Team == LocalPlayer.Team then return backupindex(t, k) end
+                
+                -- Wall check (nếu bật)
+                if matchacc.Checks.Wall then
+                    local rayParams = RaycastParams.new()
+                    rayParams.FilterDescendantsInstances = {LocalPlayer.Character}
+                    rayParams.FilterType = Enum.RaycastFilterType.Blacklist
+                    local result = workspace:Raycast(Camera.CFrame.Position, (TargetPlayer.Character.HumanoidRootPart.Position - Camera.CFrame.Position).Unit * 1000, rayParams)
+                    if result and result.Instance.CanCollide then
+                        return backupindex(t, k)
+                    end
+                end
+
+                -- Hitpart & Airpart logic
+                local partName = matchacc.TargetAim.HitPart
+                if matchacc.TargetAim.AirPartEnabled then
+                    local targetInAir = TargetPlayer.Character.Humanoid:GetState() == Enum.HumanoidStateType.Freefall or TargetPlayer.Character.Humanoid:GetState() == Enum.HumanoidStateType.Jumping
+                    local selfInAir = LocalPlayer.Character.Humanoid:GetState() == Enum.HumanoidStateType.Freefall or LocalPlayer.Character.Humanoid:GetState() == Enum.HumanoidStateType.Jumping
+                    if targetInAir or selfInAir then
+                        partName = matchacc.TargetAim.AirPart
+                    end
+                end
+
+                local targetPart = TargetPlayer.Character:FindFirstChild(partName)
+                if targetPart then
+                    local vel = VelocityTracker[TargetPlayer] and VelocityTracker[TargetPlayer].Velocity or targetPart.Velocity
+
+                    -- Prediction logic
+                    local pred = matchacc.TargetAim.Prediction -- manual default
+                    if matchacc.TargetAim.AutoPredict then
+                        if matchacc.TargetAim.PredictMode == "Ping Sets" then
+                            pred = currentPred
+                        elseif matchacc.TargetAim.PredictMode == "Calculate" then
+                            local ping = Stats.Network.ServerStatsItem["Data Ping"]:GetValue() / 1000
+                            pred = vel.Magnitude * 0.0368 + ping -- 0.0368 cực kỳ chuẩn cho hầu hết hood game (có thể chỉnh thành 0.037/0.0375 nếu muốn mạnh hơn)
+                        end
+                    end
+
+                    -- Resolver (boost prediction khi bật)
+                    if matchacc.TargetAim.Resolver then
+                        pred = pred + (vel.Magnitude * 0.015) -- resolver boost (có thể tăng/giảm tùy ý)
+                    end
+
+                    -- Jump offset
+                    local yOffset = matchacc.TargetAim.Offset
+                    if TargetPlayer.Character.Humanoid:GetState() == Enum.HumanoidStateType.Jumping or vel.Y > 20 then
+                        yOffset = matchacc.TargetAim.JumpOffset
+                    end
+
+                    local predictedPos = targetPart.Position + (vel * pred) + Vector3.new(0, yOffset, 0)
+                    return CFrame.new(predictedPos)
+                end
+            end
+        end
+    end
+    return backupindex(t, k)
+end
+end
+if getnamecallmethod and game.GameId == 9825515356 then
+    local OldNamecall
+    OldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
+        local args = {...}
+        local method = getnamecallmethod()
+
+        if method == "FireServer" and self.Name == "MainEvent" and args[1] == "Shoot" then
+            if matchacc.TargetAim.Enabled and matchacc.TargetAim.AutoFire and matchacc.TargetAim.Target ~= "None" and localPlayer and localPlayer.Character then
+                local TargetPlayer = players:FindFirstChild(matchacc.TargetAim.Target)
+                if TargetPlayer and TargetPlayer.Character and TargetPlayer.Character:FindFirstChild("Head") and not TargetPlayer.Character:FindFirstChild("ForceField") then
+                    if not KnockCheck(TargetPlayer) then
+                        local TargetPart = TargetPlayer.Character.Head
+                        if TargetPart and args[2] then
+                            for _, info in pairs(args[2][1]) do
+                                info["Instance"] = TargetPart
+                            end
+                            for _, info in pairs(args[2][2]) do
+                                info["thePart"] = TargetPart
+                                info["theOffset"] = CFrame.new()
+                            end
+                            return OldNamecall(self, unpack(args))
+                        end
+                    end
+                end
+            end
+        end
+
+        return OldNamecall(self, ...)
+    end)
+end
+
+-- Mouse1 Down Detect
+UserInputService.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        M1Down = true
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        M1Down = false
+    end
+end)
+local SelectedGun = '[Rifle]'
+local BuyingSingle = false
+local BuyingAmmo = false
+local ShopTable = {
+    ["[Rifle]"] = {ShopName = "[Rifle] - $1694"},
+    ["[Rifle Ammo]"] = {ShopName = "5 [Rifle Ammo] - $273"},
+    ["[LMG]"] = {ShopName = "[LMG] - $4098"},
+    ["[LMG Ammo]"] = {ShopName = "200 [LMG Ammo] - $328"},
+    ["[AK47]"] = {ShopName = "[AK47] - $2459"},
+    ["[AK47 Ammo]"] = {ShopName = "90 [AK47 Ammo] - $87"},
+    ["[AUG]"] = {ShopName = "[AUG] - $2131"},
+    ["[AUG Ammo]"] = {ShopName = "90 [AUG Ammo] - $87"},
+    ["[AR]"] = {ShopName = "[AR] - $1093"},
+    ["[AR Ammo]"] = {ShopName = "60 [AR Ammo] - $82"},
+    ["[Double-Barrel SG]"] = {ShopName = "[Double-Barrel SG] - $1475"},
+    ["[Double-Barrel SG Ammo]"] = {ShopName = "18 [Double-Barrel SG Ammo] - $55"},
+    ["[Drum-Shotgun]"] = {ShopName = "[Drum-Shotgun] - $1202"},
+    ["[Drum-Shotgun Ammo]"] = {ShopName = "18 [Drum-Shotgun Ammo] - $71"},
+    ["[DrumGun]"] = {ShopName = "[DrumGun] - $3278"},
+    ["[DrumGun Ammo]"] = {ShopName = "100 [DrumGun Ammo] - $219"},
+    ["[Fire Armor]"] = {ShopName = "[Fire Armor] - $2623"},
+    ["[Glock]"] = {ShopName = "[Glock] - $546"},
+    ["[Glock Ammo]"] = {ShopName = "25 [Glock Ammo] - $66"},
+    ["[P90]"] = {ShopName = "[P90] - $1093"},
+    ["[P90 Ammo]"] = {ShopName = "120 [P90 Ammo] - $66"},
+    ["[RPG]"] = {ShopName = "[RPG] - $21855"},
+    ["[RPG Ammo]"] = {ShopName = "5 [RPG Ammo] - $1093"},
+    ["[Revolver]"] = {ShopName = "[Revolver] - $1421"},
+    ["[Revolver Ammo]"] = {ShopName = "12 [Revolver Ammo] - $82"},
+    ["[Silencer]"] = {ShopName = "[Silencer] - $601"},
+    ["[Silencer Ammo]"] = {ShopName = "25 [Silencer Ammo] - $55"},
+    ["[SilencerAR]"] = {ShopName = "[SilencerAR] - $1366"},
+    ["[SilencerAR Ammo]"] = {ShopName = "120 [SilencerAR Ammo] - $82"},
+    ["[Shotgun]"] = {ShopName = "[Shotgun] - $1366"},
+    ["[Shotgun Ammo]"] = {ShopName = "20 [Shotgun Ammo] - $66"},
+    ["[SMG]"] = {ShopName = "[SMG] - $820"},
+    ["[SMG Ammo]"] = {ShopName = "80 [SMG Ammo] - $66"},
+    ["[TacticalShotgun]"] = {ShopName = "[TacticalShotgun] - $1912"},
+    ["[TacticalShotgun Ammo]"] = {ShopName = "20 [TacticalShotgun Ammo] - $66"},
+    ["[Taser]"] = {ShopName = "[Taser] - $1093"},
+    ["[Grenade]"] = {ShopName = "[Grenade] - $765"},
+}
+
+local headshots = {}
+headshots.AutoArmor = {Enabled = false}
+headshots.AutoLoadout = {Enabled = false, Gun = '[Rifle]'}
+local pingvalue = nil
+local split = nil
+local ping = nil
+local PredictionValue = nil
+
+local GlobalPredictionMultiplier = 0.80
+
+local basePredictionTable = {
+    {ping = 130, value = 0.51},
+    {ping = 125, value = 0.49},
+    {ping = 110, value = 0.46},
+    {ping = 105, value = 0.38},
+    {ping = 90,  value = 0.36},
+    {ping = 80,  value = 0.34},
+    {ping = 70,  value = 0.31},
+    {ping = 60,  value = 0.229},
+    {ping = 50,  value = 0.225},
+    {ping = 40,  value = 0.256}
+}
+local previousKnock = false
+local previousDead = false
+local lastTargetCharacter = nil
+
+-- Thêm event PlayerRemoving (sau MainEvent = getMainRemote())
+players.PlayerRemoving:Connect(function(plr)
+    if plr.Name == matchacc.TargetAim.Target then
+        Library:Notify(plr.Name .. " left the game", 3)
+        matchacc.TargetAim.Target = "None"
+        previousKnock = false
+        previousDead = false
+        lastTargetCharacter = nil
+    end
+end)
+game:GetService("RunService").Stepped:Connect(function()
+    pingvalue = game:GetService("Stats").Network.ServerStatsItem["Data Ping"]:GetValueString()
+    split = string.split(pingvalue, '(')
+    ping = tonumber(split[1])
+
+    for _, data in ipairs(basePredictionTable) do
+        if ping < data.ping then
+            PredictionValue = data.value * GlobalPredictionMultiplier
+            break
+        end
+    end
+end)
+
+RunService.Heartbeat:Connect(function(dt)
+	if getnamecallmethod and matchacc.RapidFire.Enabled then
+	    local tool = localPlayer.Character and localPlayer.Character:FindFirstChildOfClass("Tool")
+	    if tool and tool:FindFirstChild("GunScript") then 
+	        for _, v in ipairs(getconnections(tool.Activated)) do
+	            local funcinfo = debug.getinfo(v.Function)
+	            for i = 1, funcinfo.nups do
+	                local c, n = debug.getupvalue(v.Function, i)
+	                if type(c) == "number" then 
+	                    debug.setupvalue(v.Function, i, 0)
+	                end
+	            end
+	        end
+	    end
+	end
+    local TargetPlayer = players:FindFirstChild(matchacc.TargetAim.Target)
+    local useDesync = matchacc.TargetAim.Strafe or matchacc.TargetAim.AutoStomp or matchacc.KillAura.StompAura 
+    local hrp = localPlayer.Character:FindFirstChild("HumanoidRootPart")
+    local Tool = localPlayer.Character:FindFirstChildOfClass("Tool")
+    local SavedPosition = hrp.CFrame
+    if useDesync and hrp then
+        if matchacc.TargetAim.Strafe and matchacc.TargetAim.Target ~= "None" and TargetPlayer and TargetPlayer.Character and TargetPlayer.Character:FindFirstChild("Head") and not (AutoArmorActive or AutoLoadoutActive or BuyingSingleActive or BuyingAmmoActive) then
+            if not TargetPlayer.Character:FindFirstChild("ForceField") then
+                if not KnockCheck(TargetPlayer) then
+                    if matchacc.TargetAim.VoidResolver and (TargetPlayer.Character.HumanoidRootPart.Position - Vector3.new(0, 0, 0)).Magnitude > 6000 then return end
+                    local currentPosition = TargetPlayer.Character.Head.Position
+                    local lastPosition = previousPositions[TargetPlayer] or currentPosition
+                    local estimatedVelocity = (currentPosition - lastPosition) / dt
+                    local alpha = 0.5
+                    customVelocities[TargetPlayer] = (customVelocities[TargetPlayer] or Vector3.zero) * alpha + estimatedVelocity * (1 - alpha)
+                    previousPositions[TargetPlayer] = currentPosition
+                    local strafeOffset
+                    if matchacc.TargetAim.StrafeMethod == "Orbit" then
+                        strafeOffset = Vector3.new(math.cos(tick()*10)*10, 0, math.sin(tick()*10)*10)
+                    elseif matchacc.TargetAim.StrafeMethod == "Randomize" then
+                        strafeOffset = Vector3.new(math.random(-15,15), math.random(-15,15), math.random(-15,15))
+                    end
+                    local desyncPosition = currentPosition + (customVelocities[TargetPlayer] * PredictionValue) + strafeOffset
+                    hrp.CFrame = CFrame.lookAt(desyncPosition, currentPosition)
+                    RunService:BindToRenderStep("RestoreStrafe", 199, function()
+                        hrp.CFrame = SavedPosition
+                        RunService:UnbindFromRenderStep("RestoreStrafe")
+                    end)
+                    if matchacc.TargetAim.VisualizeStrafe then
+                        BodyClone:SetPrimaryPartCFrame(hrp.CFrame)
+                        BodyCloneHighlight.Enabled = true
+                        SetRigTransparency(BodyClone, 0)
+                        SetRigColor(BodyClone, matchacc.TargetAim.VisualizeStrafeInlineColor)
+                        BodyCloneHighlight.FillColor = matchacc.TargetAim.VisualizeStrafeInlineColor
+                        BodyCloneHighlight.OutlineColor = matchacc.TargetAim.VisualizeStrafeOutlineColor
+                    else
+                        BodyCloneHighlight.Enabled = false
+                        BodyClone:SetPrimaryPartCFrame(CFrame.new(9999, 9999, 9999))
+                        SetRigTransparency(BodyClone, 1)
+                    end
+                    if matchacc.TargetAim.LineStrafe and matchacc.TargetAim.VisualizeStrafe then
+                        local rootPos = hrp.Position
+                        local clonePos = BodyClone.HumanoidRootPart.Position
+                        local screen1, onScreen1 = Camera:WorldToViewportPoint(rootPos)
+                        local screen2, onScreen2 = Camera:WorldToViewportPoint(clonePos)
+                        if onScreen1 and onScreen2 then
+                            DesyncLine.From = Vector2.new(screen1.X, screen1.Y)
+                            DesyncLine.To = Vector2.new(screen2.X, screen2.Y)
+                            DesyncLine.Color = BodyCloneHighlight.FillColor
+                            DesyncLine.Visible = true
+                        else
+                            DesyncLine.Visible = false
+                        end
+                    else
+                        DesyncLine.Visible = false
+                    end
+                    local PredictedAimingPosition = currentPosition + (customVelocities[TargetPlayer] * PredictionValue)
+                    local args = {
+                        [1] = "ShootGun",
+                        [2] = Tool.Handle,
+                        [3] = Tool.Handle.Position,
+                        [4] = PredictedAimingPosition,
+                        [5] = TargetPlayer.Character.Head,
+                        [6] = Vector3.new(0, 0, 0)
+                    }
+                    if matchacc.TargetAim.AutoFire then
+                        MainEvent:FireServer(unpack(args))
+                    elseif M1Down then
+                        MainEvent:FireServer(unpack(args))
+                    end
+                end
+            else
+                hrp.CFrame += Vector3.new(math.random(-50000,50000), math.random(0,50000), math.random(-50000,50000))
+                RunService:BindToRenderStep("RestoreRandom", 199, function()
+                    hrp.CFrame = SavedPosition
+                    RunService:UnbindFromRenderStep("RestoreRandom")
+                end)
+            end
+        elseif TargetPlayer.Character:FindFirstChild("ForceField") then
+            hrp.CFrame += Vector3.new(math.random(-50000,50000), math.random(0,50000), math.random(-50000,50000))
+            RunService:BindToRenderStep("RestoreForceField", 199, function()
+                hrp.CFrame = SavedPosition
+                RunService:UnbindFromRenderStep("RestoreForceField")
+            end)
+        end
+    else
+        BodyClone:SetPrimaryPartCFrame(CFrame.new(9999, 9999, 9999))
+        BodyCloneHighlight.Enabled = false
+        DesyncLine.Visible = false
+    end
+    if matchacc.TargetAim.Enabled and matchacc.TargetAim.Target ~= "None" and TargetPlayer and TargetPlayer.Character and TargetPlayer.Character:FindFirstChild("Head") and not KnockCheck(TargetPlayer) then
+        local tool = localPlayer.Character:FindFirstChildOfClass("Tool")
+        if tool and (not TargetPlayer.Character:FindFirstChild("ForceField") or tool.Name == "[Rifle]") then
+            if matchacc.TargetAim.AutoFire then
+                if game.PlaceId == 9825515356 then
+                    local args = {
+                        "Shoot",
+                        {
+                            {
+                                [1] = {
+                                    ["Instance"] = TargetPlayer.Character.Head,
+                                    ["Normal"] = Vector3.new(0.9937344193458557, 0.10944880545139313, -0.022651424631476402),
+                                    ["Position"] = Vector3.new(-141.78562927246094, 33.89368438720703, -365.6424865722656)
+                                },
+                                [2] = {
+                                    ["Instance"] = TargetPlayer.Character.Head,
+                                    ["Normal"] = Vector3.new(0.9937344193458557, 0.10944880545139313, -0.022651424631476402),
+                                    ["Position"] = Vector3.new(-141.78562927246094, 33.89368438720703, -365.6424865722656)
+                                },
+                                [3] = {
+                                    ["Instance"] = TargetPlayer.Character.Head,
+                                    ["Normal"] = Vector3.new(0.9937343597412109, 0.10944879800081253, -0.022651422768831253),
+                                    ["Position"] = TargetPlayer.Character.Head.Position 
+                                },
+                                [4] = {
+                                    ["Instance"] = TargetPlayer.Character.Head,
+                                    ["Normal"] = Vector3.new(0.9937344193458557, 0.10944880545139313, -0.022651424631476402),
+                                    ["Position"] = TargetPlayer.Character.Head.Position 
+                                },
+                                [5] = {
+                                    ["Instance"] = TargetPlayer.Character.Head,
+                                    ["Normal"] = Vector3.new(0.9937344193458557, 0.10944880545139313, -0.022651424631476402),
+                                    ["Position"] = Vector3.new(-141.79481506347656, 34.033607482910156, -365.369384765625)
+                                }
+                            },
+                            {
+                                [1] = {
+                                    ["thePart"] = TargetPlayer.Character.Head,
+                                    ["theOffset"] = CFrame.new(0, 0, 0)
+                                },
+                                [2] = {
+                                    ["thePart"] = TargetPlayer.Character.Head,
+                                    ["theOffset"] = CFrame.new(0, 0, 0)
+                                },
+                                [3] = {
+                                    ["thePart"] = TargetPlayer.Character.Head,
+                                    ["theOffset"] = CFrame.new(0, 0, 0)
+                                },
+                                [4] = {
+                                    ["thePart"] = TargetPlayer.Character.Head,
+                                    ["theOffset"] = CFrame.new(0, 0, 0)
+                                },
+                                [5] = {
+                                    ["thePart"] = TargetPlayer.Character.Head,
+                                    ["theOffset"] = CFrame.new(0, 0, 0)
+                                }
+                            },
+                            localPlayer.Character.Head.Position,
+                            localPlayer.Character.Head.Position,
+                            workspace:GetServerTimeNow()
+                        }
+                    }
+                    MainEvent:FireServer(unpack(args))
+                else
+                    local args = {
+                        [1] = "ShootGun",
+                        [2] = tool.Handle,
+                        [3] = tool.Handle.Position,
+                        [4] = TargetPlayer.Character.Head.Position,
+                        [5] = TargetPlayer.Character.Head,
+                        [6] = Vector3.new(0, 0, 0)
+                    }
+                    MainEvent:FireServer(unpack(args))
+                end
+            elseif M1Down then
+                local args = {
+                    [1] = "ShootGun",
+                    [2] = tool.Handle,
+                    [3] = tool.Handle.Position,
+                    [4] = TargetPlayer.Character.Head.Position,
+                    [5] = TargetPlayer.Character.Head,
+                    [6] = Vector3.new(0, 0, 0)
+                }
+                MainEvent:FireServer(unpack(args))
+            end
+        end
+    end
+end)
+RunService.Heartbeat:Connect(function(dt)
+    TargetAimActive = false
+    BuyingActive = false
+    AutoArmorActive = false
+    AutoLoadoutActive = false
+    BuyingSingleActive = false
+    BuyingAmmoActive = false
+
+    local hrp = localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart")
+    local Tool = localPlayer.Character and localPlayer.Character:FindFirstChildOfClass("Tool")
+    local SavedPosition = hrp and hrp.CFrame
+
+
+    -- Desync logic (chỉ bật desync khi không mua đồ / không strafe)
+    local useDesync = matchacc.TargetAim.Strafe or matchacc.TargetAim.AutoStomp or matchacc.KillAura.StompAura
+    abletodesync = not (TargetAimActive or AutoArmorActive or AutoLoadoutActive or BuyingAmmoActive or BuyingSingleActive)
+
+    -- === AUTO KILL LOGIC (PAUSE KHI MUA ĐỒ) ===
+    if matchacc.AutoKill.Enabled and matchacc.AutoKill.Target then
+        local Target = players:FindFirstChild(matchacc.AutoKill.Target)
+        if Target and Target.Character and localPlayer.Character then
+            local humanoidRootPart = localPlayer.Character:FindFirstChild("HumanoidRootPart")
+            local head = localPlayer.Character:FindFirstChild("Head")
+            local tool = localPlayer.Character:FindFirstChildOfClass("Tool")
+            local toolHandle = tool and tool:FindFirstChild("Handle")
+            local targetHRP = Target.Character:FindFirstChild("HumanoidRootPart")
+            local targetHead = Target.Character:FindFirstChild("Head")
+
+			if humanoidRootPart and head and toolHandle and targetHRP and targetHead then
+			    if Target.Character:FindFirstChild("Humanoid") then
+			        local hum = Target.Character.Humanoid
+			        local curr = math.round(hum.Health)
+			        local prev = previousTargetHealth[Target.Name]
+			
+			        if prev ~= nil and curr < prev then
+			            -- Hit Sound
+			            if matchacc.HitEffects.HitSounds then
+			                createHitSound()
+			            end
+			
+			            -- Hit Notification
+			            if matchacc.HitEffects.HitNotifications then
+			                Library:Notify("UE - AutoKill Hit: " .. Target.Name .. " - Health: " .. curr, matchacc.HitEffects.HitNotificationsTime)
+			            end
+			
+			            -- Hit Chams (chỉ khi đang target bằng AutoKill hoặc TargetAim)
+			            if matchacc.HitEffects.HitChams.Enabled then
+			                createHitChamWithFade(Target)
+			            end
+			        end
+			
+			        previousTargetHealth[Target.Name] = curr
+			    end
+			end
+        end
+    end
+
+	if matchacc.TargetAim.Enabled and matchacc.TargetAim.Target ~= "None" then
+	    local TargetPlayer = players:FindFirstChild(matchacc.TargetAim.Target)
+	    if TargetPlayer and TargetPlayer.Character and TargetPlayer.Character:FindFirstChild("Humanoid") then
+	        local hum = TargetPlayer.Character.Humanoid
+	        local curr = math.round(hum.Health)
+	        local prev = previousTargetHealth[TargetPlayer.Name]
+	
+	        if prev ~= nil and curr < prev then
+	            -- Hit Sound
+	            if matchacc.HitEffects.HitSounds then
+	                createHitSound()
+	            end
+	
+	            -- Hit Notification
+	            if matchacc.HitEffects.HitNotifications then
+	                Library:Notify("UE - Target Hit: " .. TargetPlayer.Name .. " - Health: " .. curr, matchacc.HitEffects.HitNotificationsTime)
+	            end
+	
+	            -- Hit Chams
+	            if matchacc.HitEffects.HitChams.Enabled then
+	                createHitChamWithFade(TargetPlayer)
+	            end
+	        end
+	
+	        previousTargetHealth[TargetPlayer.Name] = curr
+	    end
+	end
+
+    local TargetPlayer = players:FindFirstChild(matchacc.TargetAim.Target)
+    if matchacc.KillAura.Enabled then
+        if Tool and Tool:FindFirstChild("Handle") then
+            if localPlayer.Character.BodyEffects:FindFirstChild("K.O") and not localPlayer.Character.BodyEffects["K.O"].Value then
+                local closest = math.huge
+                local ka_target = nil
+                for _, player in pairs(players:GetPlayers()) do
+                    if player ~= localPlayer and not matchacc.KillAura.Whitelist[player.Name] and player.Character and player.Character:FindFirstChild("Head") and not player.Character:FindFirstChild("GRABBING_CONSTRAINT") then
+                        if player.Character.BodyEffects:FindFirstChild("K.O") and not player.Character.BodyEffects["K.O"].Value then
+                            local dist = (hrp.Position - player.Character.Head.Position).Magnitude
+                            if dist < closest and dist <= matchacc.KillAura.Range then
+                                closest = dist
+                                ka_target = player
+                            end
+                        end
+                    end
+                end
+                if ka_target and ka_target.Character and ka_target.Character:FindFirstChild("Head") then
+                    hrp.CFrame = CFrame.lookAt(hrp.Position, ka_target.Character.Head.Position)
+                    if matchacc.KillAura.Visualize then
+                        ka_tracer.Transparency = 0
+                        ka_tracer.Size = Vector3.new(0.2, 0.2, (hrp.Position - ka_target.Character.Head.Position).Magnitude)
+                        ka_tracer.CFrame = CFrame.lookAt(hrp.Position, ka_target.Character.Head.Position) * CFrame.new(0, 0, -ka_tracer.Size.Z / 2)
+                    else
+                        ka_tracer.Transparency = 1
+                    end
+                    local humanoid = ka_target.Character:FindFirstChild("Humanoid")
+                    if humanoid then
+                        if not ka_lastHealth[ka_target.Name] then
+                            ka_lastHealth[ka_target.Name] = humanoid.Health
+                        end
+                        if humanoid.Health < ka_lastHealth[ka_target.Name] then
+                            createHitSound()
+                        end
+                        ka_lastHealth[ka_target.Name] = humanoid.Health
+                    end
+                    local offset = matchacc.KillAura.Silent and Vector3.new(0, -12, 0) or Vector3.new(0, 0, 0)
+                    MainEvent:FireServer(
+                        "ShootGun",
+                        Tool:FindFirstChild("Handle"),
+                        Tool:FindFirstChild("Handle").CFrame.Position + offset,
+                        ka_target.Character.Head.Position + offset,
+                        ka_target.Character.Head,
+                        Vector3.new(0, 0, -1)
+                    )
+                else
+                    ka_tracer.Transparency = 1
+                end
+            end
+        else
+            ka_tracer.Transparency = 1
+        end
+    end
+
+    if matchacc.TargetAim.Enabled and matchacc.TargetAim.Target ~= "None" and TargetPlayer and TargetPlayer.Character and TargetPlayer.Character:FindFirstChild("Head") then
+        if matchacc.TargetAim.Highlight then
+            if not TargetPlayer.Character:FindFirstChild("Highlight") then
+                local Highlight = Instance.new("Highlight")
+                Highlight.Parent = TargetPlayer.Character
+            end
+            TargetPlayer.Character.Highlight.FillColor = matchacc.TargetAim.HighlightFillColor
+            TargetPlayer.Character.Highlight.OutlineColor = matchacc.TargetAim.HighlightOutlineColor
+        end
+        if matchacc.TargetAim.LookAt then
+            localPlayer.Character.Humanoid.AutoRotate = false
+            localPlayer.Character.HumanoidRootPart.CFrame = CFrame.lookAt(localPlayer.Character.HumanoidRootPart.Position, Vector3.new(TargetPlayer.Character.HumanoidRootPart.Position.X, localPlayer.Character.HumanoidRootPart.Position.Y, TargetPlayer.Character.HumanoidRootPart.Position.Z))
+        else
+            localPlayer.Character.Humanoid.AutoRotate = true
+        end
+        if matchacc.TargetAim.Tracer then
+            local mouseScreenPosition = UserInputService:GetMouseLocation()
+            local head = TargetPlayer.Character:FindFirstChild("Head")
+            local humanoidRootPart = TargetPlayer.Character:FindFirstChild("HumanoidRootPart")
+            if head and humanoidRootPart then
+                local headScreenPosition, onScreen = Camera:WorldToViewportPoint(head.Position)
+                if onScreen then
+                    local adjustedMousePosition = Vector2.new(mouseScreenPosition.X, mouseScreenPosition.Y)
+                    local tool = localPlayer.Character:FindFirstChildOfClass("Tool")
+                    if matchacc.TargetAim.TracerPosition == "Tool" and tool and tool:FindFirstChild("Handle") then
+                        local pos = Camera:WorldToViewportPoint(tool.Handle.Position)
+                        tracer.From = Vector2.new(pos.X, pos.Y)
+                        tracerOutline.From = Vector2.new(pos.X, pos.Y)
+                    else
+                        tracer.From = adjustedMousePosition
+                        tracerOutline.From = adjustedMousePosition
+                    end           
+                    tracer.To = Vector2.new(headScreenPosition.X, headScreenPosition.Y)
+                    tracerOutline.To = Vector2.new(headScreenPosition.X, headScreenPosition.Y)
+                    tracerOutline.Visible = true
+                    tracer.Visible = true
+                    tracerOutline.Color = matchacc.TargetAim.TracerOutlineColor
+                    tracer.Color = matchacc.TargetAim.TracerFillColor
+                else
+                    tracer.Visible = false
+                    tracerOutline.Visible = false
+                end
+            end
+        end
+    else
+        localPlayer.Character.Humanoid.AutoRotate = true
+        tracer.Visible = false
+        tracerOutline.Visible = false
+    end
+    if matchacc.TargetAim.Target ~= "None" then
+        local TargetPlayer = players:FindFirstChild(matchacc.TargetAim.Target)
+        if TargetPlayer then
+            if TargetPlayer.Character ~= lastTargetCharacter and lastTargetCharacter then
+                Library:Notify(TargetPlayer.Name .. " respawned", 3)
+                previousKnock = false
+                previousDead = false
+            end
+            lastTargetCharacter = TargetPlayer.Character
+            if TargetPlayer.Character then
+                local be = TargetPlayer.Character:FindFirstChild("BodyEffects")
+                if be then
+                    local ko = be:FindFirstChild("K.O")
+                    local sdeath = be:FindFirstChild("SDeath")
+                    local hum = TargetPlayer.Character:FindFirstChildOfClass("Humanoid")
+                    local currentKnock = ko and ko.Value or false
+                    local currentDead = (sdeath and sdeath.Value) or (hum and hum.Health <= 0) or false
+                    if currentKnock and not previousKnock then
+                        Library:Notify(TargetPlayer.Name .. " knocked", 3)
+                    end
+                    if currentDead and not previousDead then
+                        Library:Notify(TargetPlayer.Name .. " died", 3)
+                    end
+                    previousKnock = currentKnock
+                    previousDead = currentDead
+                end
+            end
+        else
+            Library:Notify(matchacc.TargetAim.Target .. " left the game", 3)
+            matchacc.TargetAim.Target = "None"
+            previousKnock = false
+            previousDead = false
+            lastTargetCharacter = nil
+        end
+    end
+    if not useDesync or hrp then 
+        BodyClone:SetPrimaryPartCFrame(CFrame.new(9999, 9999, 9999))
+        BodyCloneHighlight.Enabled = false
+        DesyncLine.Visible = false
+    end
+    if useDesync and hrp then
+        if matchacc.TargetAim.AutoStomp and TargetPlayer and KnockCheck(TargetPlayer) then
+            local bodyEffects = TargetPlayer.Character:FindFirstChild("BodyEffects")
+            local isDead = bodyEffects and bodyEffects:FindFirstChild("SDeath") and bodyEffects.SDeath.Value
+            if isDead == false then
+                hrp.CFrame = CFrame.new(TargetPlayer.Character.UpperTorso.Position + Vector3.new(0, 3, 0))
+                if matchacc.HitEffects.HitNotifications then
+                    if tick() - t >= 3 then
+                        t = tick()
+                        Library:Notify("UE - Attempted to Stomp Target: " .. TargetPlayer.Name, matchacc.HitEffects.HitNotificationsTime)
+                    end
+                end
+                MainEvent:FireServer("Stomp")
+                RunService:BindToRenderStep("RestoreStomp", 199, function()
+                    hrp.CFrame = SavedPosition
+                    RunService:UnbindFromRenderStep("RestoreStomp")
+                end)
+            end
+        elseif matchacc.KillAura.StompAura and not (TargetAimActive or AutoArmorActive or AutoLoadoutActive or BuyingAmmoActive or BuyingSingleActive) then
+            local shortestDistance = math.huge
+            local stompTarget
+            for _, player in pairs(players:GetPlayers()) do
+                if player ~= localPlayer and player.Character and player.Character:FindFirstChild("Head") and KnockCheck(player) and not player.Character:FindFirstChild("ForceField") then
+                    local distance = (player.Character.HumanoidRootPart.Position - hrp.Position).Magnitude
+                    if distance <= matchacc.KillAura.Range and distance < shortestDistance then
+                        shortestDistance = distance
+                        stompTarget = player
+                    end
+                end
+            end
+            if stompTarget then
+                local bodyEffects = stompTarget.Character:FindFirstChild("BodyEffects")
+                local isDead = bodyEffects and bodyEffects:FindFirstChild("SDeath") and bodyEffects.SDeath.Value
+                if isDead == false then
+                    hrp.CFrame = CFrame.new(stompTarget.Character.UpperTorso.Position + Vector3.new(0, 3, 0))
+                    MainEvent:FireServer("Stomp")
+                    RunService:BindToRenderStep("RestoreStompAura", 199, function()
+                        hrp.CFrame = SavedPosition
+                        RunService:UnbindFromRenderStep("RestoreStompAura")
+                    end)
+                end
+            end
+        end
+    end
+end)
+game:GetService('RunService').Heartbeat:Connect(function(dt)
+
+    -- Target Aim Logic (giữ nguyên từ script gốc của bạn)
+    if matchacc.TargetAim.Enabled and matchacc.TargetAim.Strafe and matchacc.TargetAim.Target ~= "None" and localPlayer and localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart") and localPlayer.Character:FindFirstChild("Humanoid") and localPlayer.Character:FindFirstChild("Head") then
+        local TargetPlayer = players:FindFirstChild(matchacc.TargetAim.Target)
+        local Tool = localPlayer.Character and localPlayer.Character:FindFirstChildOfClass("Tool")
+        if TargetPlayer and TargetPlayer.Character and TargetPlayer.Character:FindFirstChild("Head") and Tool then
+            if not TargetPlayer.Character:FindFirstChild("ForceField") or Tool.Name == "[Rifle]" then
+                local bodyEffects = TargetPlayer.Character:FindFirstChild("BodyEffects")
+                local isDead = bodyEffects and bodyEffects:FindFirstChild("Dead") and bodyEffects.Dead.Value
+                if ((not KnockCheck(TargetPlayer)) or (matchacc.TargetAim.AutoStomp and isDead == false)) and localPlayer.Character and localPlayer.Character:FindFirstChild("BodyEffects") and localPlayer.Character.BodyEffects:FindFirstChild("Reload") then
+                    if matchacc.TargetAim.VoidResolver then
+                        if (TargetPlayer.Character.HumanoidRootPart.Position - Vector3.new(0, 0, 0)).Magnitude > 6000 then
+                            return
+                        end
+                    end
+                    TargetAimActive = true
+                end
+            end
+        end
+    end
+    -- Buy Single Logic
+    if BuyingSingle and not game.Players.LocalPlayer.Character:FindFirstChild(SelectedGun) and not game.Players.LocalPlayer.Backpack:FindFirstChild(SelectedGun) then
+        BuyingSingleActive = true
+    end
+    -- Buying Ammo Logic
+    if BuyingAmmo then
+        BuyingAmmoActive = true
+    end
+    -- Auto Loadout Logic (sửa: mua súng nếu chưa có, mua ammo nếu hết đạn - mua 3 lần)
+    if headshots.AutoLoadout.Enabled and headshots.AutoLoadout.Gun and ShopTable[headshots.AutoLoadout.Gun] then
+        local char = game.Players.LocalPlayer.Character
+        local backpack = game.Players.LocalPlayer.Backpack
+        local gunInChar = char:FindFirstChild(headshots.AutoLoadout.Gun)
+        local gunInBackpack = backpack:FindFirstChild(headshots.AutoLoadout.Gun)
+       
+        -- Mua súng nếu chưa có
+        if not gunInChar and not gunInBackpack then
+            AutoLoadoutActive = true
+        else
+            -- Kiểm tra ammo (súng giờ ở backpack)
+            local equippedGun = backpack:FindFirstChild(headshots.AutoLoadout.Gun)
+            if equippedGun and equippedGun:FindFirstChild("Ammo") and equippedGun.Ammo.Value == 0 then
+                -- Mua ammo 3 lần khi hết đạn
+                local AmmoName = "[" .. headshots.AutoLoadout.Gun:sub(2, -2) .. " Ammo]"
+                if ShopTable[AmmoName] then
+                    for i = 1, 3 do
+                        local shop = game.Workspace.Ignored.Shop:FindFirstChild(ShopTable[AmmoName].ShopName)
+                        if shop and shop:FindFirstChild("Head") then
+                            local hrp = char.HumanoidRootPart
+                            local saved = hrp.CFrame
+                            hrp.CFrame = shop.Head.CFrame
+                            game:GetService("RunService"):BindToRenderStep("RestoreCFrame", 199, function()
+                                hrp.CFrame = saved
+                                game:GetService("RunService"):UnbindFromRenderStep("RestoreCFrame")
+                            end)
+			                local currentTool = char:FindFirstChildOfClass("Tool")
+			                if currentTool then
+			                    currentTool.Parent = plr.Backpack
+			                end
+                            fireclickdetector(shop:FindFirstChildOfClass("ClickDetector"))
+                        end
+                    end
+                end
+            end
+        end
+    end
+    -- Auto Armor Logic
+    if headshots.AutoArmor.Enabled and game.Players.LocalPlayer.Character.BodyEffects.Armor.Value < 100 then
+        AutoArmorActive = true
+    end
+    -- Checking for desync
+    if TargetAimActive or matchacc.AutoKill.Enabled or AutoArmorActive or AutoLoadoutActive or BuyingAmmoActive or BuyingSingleActive then
+        abletodesync = false
+    else
+        abletodesync = true
+    end
+    -- Xử lý mua hàng trong loop (tương tự headshotcc)
+    local plr = game.Players.LocalPlayer
+    local char = plr.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if char and hrp then
+        pcall(function()
+            -- Buy Single (thả bất kỳ tool đang cầm trước khi mua)
+            if BuyingSingle and not char:FindFirstChild(SelectedGun) and not plr.Backpack:FindFirstChild(SelectedGun) then
+                local shop = game.Workspace.Ignored.Shop:FindFirstChild(ShopTable[SelectedGun].ShopName)
+                if shop and shop:FindFirstChild("Head") then
+                    local saved = hrp.CFrame
+                    hrp.CFrame = shop.Head.CFrame
+                    game:GetService("RunService"):BindToRenderStep("RestoreCFrame", 199, function()
+                        hrp.CFrame = saved
+                        game:GetService("RunService"):UnbindFromRenderStep("RestoreCFrame")
+                    end)
+	                local currentTool = char:FindFirstChildOfClass("Tool")
+	                if currentTool then
+	                    currentTool.Parent = plr.Backpack
+	                end
+                    fireclickdetector(shop:FindFirstChildOfClass("ClickDetector"))
+                end
+            else
+                BuyingSingle = false
+            end
+            -- Buy Ammo (single pack) - đã có thả tool
+            if BuyingAmmo then
+                local AmmoName = "[" .. SelectedGun:sub(2, -2) .. " Ammo]"
+                local ammoData = ShopTable[AmmoName]
+                if ammoData then
+                    local shop = game.Workspace.Ignored.Shop:FindFirstChild(ammoData.ShopName)
+                    if shop and shop:FindFirstChild("Head") then
+                        if char:FindFirstChild(SelectedGun) or plr.Backpack:FindFirstChild(SelectedGun) then
+                            local gunObj = char:FindFirstChild(SelectedGun)
+                            if gunObj then
+                                gunObj.Parent = plr.Backpack
+                            end
+                            local saved = hrp.CFrame
+                            hrp.CFrame = shop.Head.CFrame
+                            game:GetService("RunService"):BindToRenderStep("RestoreCFrame", 199, function()
+                                hrp.CFrame = saved
+                                game:GetService("RunService"):UnbindFromRenderStep("RestoreCFrame")
+                            end)
+			                local currentTool = char:FindFirstChildOfClass("Tool")
+			                if currentTool then
+			                    currentTool.Parent = plr.Backpack
+			                end
+                            fireclickdetector(shop:FindFirstChildOfClass("ClickDetector"))
+                        end
+                    end
+                end
+                BuyingAmmo = false
+            end
+            -- Auto Loadout (mua súng nếu chưa có - ammo đã xử lý ở trên)
+            if headshots.AutoLoadout.Enabled and headshots.AutoLoadout.Gun and ShopTable[headshots.AutoLoadout.Gun] and not char:FindFirstChild(headshots.AutoLoadout.Gun) and not plr.Backpack:FindFirstChild(headshots.AutoLoadout.Gun) then
+                -- Thả tool đang cầm nếu có
+                local ShopItem = game.Workspace.Ignored.Shop:FindFirstChild(ShopTable[headshots.AutoLoadout.Gun].ShopName)
+                if ShopItem and ShopItem:FindFirstChild("Head") then
+                    local saved = hrp.CFrame
+                    hrp.CFrame = ShopItem.Head.CFrame
+                    game:GetService("RunService"):BindToRenderStep("RestoreCFrame", 199, function()
+                        hrp.CFrame = saved
+                        game:GetService("RunService"):UnbindFromRenderStep("RestoreCFrame")
+                    end)
+	                local currentTool = char:FindFirstChildOfClass("Tool")
+	                if currentTool then
+	                    currentTool.Parent = plr.Backpack
+	                    task.wait(0.1)
+	                end
+                    fireclickdetector(ShopItem:FindFirstChildOfClass("ClickDetector"))
+                end
+            end
+            -- Auto Armor
+            if headshots.AutoArmor.Enabled and char.BodyEffects and char.BodyEffects.Armor and char.BodyEffects.Armor.Value < 100 then
+                local shop = game.Workspace.Ignored.Shop:FindFirstChild('[High-Medium Armor] - $2513')
+                if shop and shop:FindFirstChild("Head") then
+                    local oldArmor = char.BodyEffects.Armor.Value
+                    local saved = hrp.CFrame
+                    hrp.CFrame = shop.Head.CFrame
+                    game:GetService("RunService"):BindToRenderStep("RestoreCFrame", 199, function()
+                        hrp.CFrame = saved
+                        game:GetService("RunService"):UnbindFromRenderStep("RestoreCFrame")
+                    end)
+	                local currentTool = char:FindFirstChildOfClass("Tool")
+	                if currentTool then
+	                    currentTool.Parent = plr.Backpack
+	                end
+                    fireclickdetector(shop:FindFirstChildOfClass("ClickDetector"))
+                    if char.BodyEffects.Armor.Value > oldArmor then
+                    end
+                end
+            end
+        end)
+    end
+end)
+RunService.Heartbeat:Connect(function(dt)
+        if matchacc.AutoKill.Enabled and matchacc.AutoKill.Target and not (AutoArmorActive or AutoLoadoutActive or BuyingSingleActive or BuyingAmmoActive) then
+        if matchacc.AutoKill.Target ~= nil then
+            local Target = players:FindFirstChild(matchacc.AutoKill.Target)
+            if Target and Target.Character and localPlayer and localPlayer.Character then
+                local humanoidRootPart = localPlayer.Character:FindFirstChild("HumanoidRootPart")
+                local head = localPlayer.Character:FindFirstChild("Head")
+                local tool = localPlayer.Character:FindFirstChildOfClass("Tool")
+                local toolHandle = tool and tool:FindFirstChild("Handle")
+                local targetHRP = Target.Character:FindFirstChild("HumanoidRootPart")
+                local targetHead = Target.Character:FindFirstChild("Head")
+
+                local SavedPosition = localPlayer.Character.HumanoidRootPart.CFrame
+
+                if humanoidRootPart and head and toolHandle and targetHRP and targetHead then
+                    if not KnockCheck(Target) then
+                        if not Target.Character:FindFirstChild("ForceField") then
+                            localPlayer.Character.HumanoidRootPart.CFrame = CFrame.lookAt(Target.Character.Head.Position + Vector3.new(math.random(-15,15), math.random(-15,15), math.random(-15,15)), Target.Character.Head.Position)
+                            Library:Notify("UE - Shooting Target.", 1)
+                            MainEvent:FireServer("ShootGun", toolHandle, toolHandle.Position, Target.Character.Head.Position, targetHead, Vector3.new(0, 1, 0))
+                        else
+                            localPlayer.Character.HumanoidRootPart.CFrame += Vector3.new(math.random(-50000,50000), math.random(0,50000), math.random(-50000,50000))
+                            Library:Notify("UE - Waiting.. Target has spawn protection.", 1)
+                            MainEvent:FireServer("Reload", tool)
+                        end
+                        if matchacc.AutoKill.AutoKillDesync then
+                            RunService:BindToRenderStep("RestoreCFrame", 199, function()
+                                localPlayer.Character.HumanoidRootPart.CFrame = SavedPosition
+                                RunService:UnbindFromRenderStep("RestoreCFrame")
+                            end)
+                        end
+                    else
+                        -- Handle dead targets
+                        local bodyEffects = Target.Character:FindFirstChild("BodyEffects")
+                        local isDead = bodyEffects and bodyEffects:FindFirstChild("SDeath") and bodyEffects.SDeath.Value
+                        if isDead == false then
+                            if Target.Character:FindFirstChild("UpperTorso") and Target.Character:FindFirstChild("HumanoidRootPart") and Target.Character:FindFirstChild("Humanoid") then
+                                humanoidRootPart.CFrame = CFrame.new(Target.Character.UpperTorso.Position + Vector3.new(0, 3, 0))
+                                Library:Notify("UE - Stomping Target.", 1)
+                                MainEvent:FireServer("Stomp")
+                            end
+                        elseif isDead == true then
+                            -- Move to safe position when target is dead
+                            localPlayer.Character.HumanoidRootPart.CFrame += Vector3.new(math.random(-50000,50000), math.random(0,50000), math.random(-50000,50000))
+                            Library:Notify("UE - Waiting.. Target is currently dead.", 1)
+                            MainEvent:FireServer("Reload", tool)
+                        end
+
+                        if matchacc.AutoKill.AutoKillDesync then
+                            RunService:BindToRenderStep("RestoreCFrame", 199, function()
+                                localPlayer.Character.HumanoidRootPart.CFrame = SavedPosition
+                                RunService:UnbindFromRenderStep("RestoreCFrame")
+                            end)
+                        end
+
+                    end
+                else
+                    localPlayer.Character.HumanoidRootPart.CFrame += Vector3.new(math.random(-50000,50000), math.random(0,50000), math.random(-50000,50000))
+                    Library:Notify("UE - Waiting.. Equip your gun while using 'Auto Kill Target'.", 1)
+
+                    if matchacc.AutoKill.AutoKillDesync then
+                        RunService:BindToRenderStep("RestoreCFrame", 199, function()
+                            localPlayer.Character.HumanoidRootPart.CFrame = SavedPosition
+                            RunService:UnbindFromRenderStep("RestoreCFrame")
+                        end)
+                    end
+                end
+            end
+        else
+            -- If no target is found
+            local humanoidRootPart = localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart")
+            if humanoidRootPart then
+                humanoidRootPart.CFrame += Vector3.new(math.random(-50000,50000), math.random(0,50000), math.random(-50000,50000))
+            end
+            Library:Notify("UE - Target not found(Hide void).", 3)
+            if matchacc.AutoKill.AutoKillDesync then
+                RunService:BindToRenderStep("RestoreCFrame", 199, function()
+                    localPlayer.Character.HumanoidRootPart.CFrame = SavedPosition
+                    RunService:UnbindFromRenderStep("RestoreCFrame")
+                end)
+            end
+        end
+    end
+end)
+end)()
+coroutine.wrap(function()
+local RS = cloneref(game:GetService("RunService"))
+local highlights = {}
+
+RS.RenderStepped:Connect(function()
+    if matchacc.HitboxExpander.Enabled then
+        for _, Player in pairs(players:GetPlayers()) do
+            if Player == Client then continue end
+            local HRP = Player.Character and Player.Character:WaitForChild("HumanoidRootPart")
+            if HRP then
+                HRP.Size = Vector3.new(matchacc.HitboxExpander.Size, matchacc.HitboxExpander.Size, matchacc.HitboxExpander.Size)
+                HRP.CanCollide = false
+                if matchacc.HitboxExpander.Visualize then
+                    if not highlights[Player] then
+                        local Visualize = Instance.new("Highlight")
+                        HRP.Transparency = 0.9
+                        Visualize.Parent = HRP
+                        Visualize.FillColor = matchacc.HitboxExpander.Color
+                        Visualize.OutlineColor = matchacc.HitboxExpander.OutlineColor
+                        Visualize.FillTransparency = matchacc.HitboxExpander.FillTransparency
+                        Visualize.OutlineTransparency = matchacc.HitboxExpander.OutlineTransparency
+                        highlights[Player] = Visualize
+                    else
+                        local Visualize = highlights[Player]
+                        HRP.Transparency = 0.9
+                        Visualize.FillColor = matchacc.HitboxExpander.Color
+                        Visualize.OutlineColor = matchacc.HitboxExpander.OutlineColor
+                        Visualize.FillTransparency = matchacc.HitboxExpander.FillTransparency
+                        Visualize.OutlineTransparency = matchacc.HitboxExpander.OutlineTransparency
+                    end
+                else
+                    local Visualize = highlights[Player]
+                    if Visualize then
+                        Visualize:Destroy()
+                        HRP.Transparency = 1
+                        highlights[Player] = nil
+                    end
+                end
+            end
+        end
+    end
+end)
+
+local CharacterModsGroup = Tabs.Character:AddRightGroupbox('Character Mods')
+
+-- Anti Slowdown (No Slow / No Jump Cooldown / No Reload Slow)
+local function toggleAntiSlow(bool)
+    if bool then
+        RunService:BindToRenderStep("Anti-Slow", Enum.RenderPriority.Camera.Value, function()
+            if localPlayer.Character and localPlayer.Character:FindFirstChild("BodyEffects") then
+                local BE = localPlayer.Character.BodyEffects
+                local Movement = BE:FindFirstChild("Movement")
+                if Movement then
+                    if Movement:FindFirstChild("NoWalkSpeed") then Movement.NoWalkSpeed:Destroy() end
+                    if Movement:FindFirstChild("ReduceWalk") then Movement.ReduceWalk:Destroy() end
+                    if Movement:FindFirstChild("NoJumping") then Movement.NoJumping:Destroy() end
+                end
+                if BE:FindFirstChild("Reload") and BE.Reload.Value then
+                    BE.Reload.Value = false
+                end
+            end
+        end)
+    else
+        RunService:UnbindFromRenderStep("Anti-Slow")
+    end
+end
+
+CharacterModsGroup:AddToggle('AntiSlow', {
+    Text = 'No Slowdown',
+    Default = false,
+    Callback = function(v) toggleAntiSlow(v) end
+})
+
+-- No Jump Cooldown
+getgenv().NoJumpCooldown = false
+RunService.RenderStepped:Connect(function()
+    if getgenv().NoJumpCooldown and localPlayer.Character and localPlayer.Character:FindFirstChild("Humanoid") then
+        local hum = localPlayer.Character.Humanoid
+        hum.UseJumpPower = not hum.UseJumpPower
+    end
+end)
+
+CharacterModsGroup:AddToggle('NoJumpCooldown', {
+    Text = 'No Jump Cooldown',
+    Default = false,
+    Callback = function(v) getgenv().NoJumpCooldown = v end
+})
+
+-- ==================== ANIMATION (Right Side) ====================
+local AnimationGroup = Tabs.Character:AddRightGroupbox('Animation')
+
+
+getgenv().Matcha.Dance = {
+    Enabled = false,
+    Playing = false,
+    Selected = "Float",
+    AnimationId = "112089880074848"
+}
+
+local DanceList = {
+    ["Baby Queen - Bouncy Twirl"] = "14352343065",
+    ["Floss"] = "10714340543",
+    ["Yungblud Happier Jump"] = "15609995579",
+    ["Godlike"] = "10714347256",
+    ["Mae Stephens - Dance"] = "16553163212",
+    ["Victory Dance"] = "15505456446",
+    ["Elton John - Heart Skip"] = "11309255148",
+    ["Sturdy Dance - Ice Spice"] = "17746180844",
+    ["Old Town Road Dance"] = "10714391240",
+    ["Sidekicks"] = "10370362157",
+    ["Baby Dance"] = "10713983178",
+    ["Rampage"] = "139658061151500",
+    ["Rambunctious"] = "85916053135662",
+    ["Griddy"] = "121966805049108",
+    ["Orange Justice"] = "78927657777256",
+    ["Float"] = "112089880074848",
+    ["Float in clouds"] = "116370641960604"
+}
+
+local danceTrack = nil
+
+local function loadDance(name)
+    local char = localPlayer.Character
+    if not char or not char:FindFirstChild("Humanoid") then return end
+
+    if danceTrack then
+        danceTrack:Stop()
+        danceTrack:Destroy()
+        danceTrack = nil
+    end
+
+    local animId = DanceList[name]
+    if animId then
+        local anim = Instance.new("Animation")
+        anim.AnimationId = "rbxassetid://" .. animId
+        danceTrack = char.Humanoid:LoadAnimation(anim)
+        danceTrack.Priority = Enum.AnimationPriority.Action
+        if getgenv().Matcha.Dance.Playing then
+            danceTrack.Looped = true
+            danceTrack:Play()
+        end
+    end
+end
+
+AnimationGroup:AddDropdown('DanceSelect', {
+    Values = (function()
+        local t = {}
+        for k,_ in pairs(DanceList) do table.insert(t, k) end
+        table.sort(t)
+        return t
+    end)(),
+    Default = 1,
+    Multi = false,
+    Text = 'Dance Animation',
+    Searchable = true,
+    Callback = function(v)
+        getgenv().Matcha.Dance.Selected = v
+        loadDance(v)
+    end
+})
+
+AnimationGroup:AddToggle('DanceToggle', {
+    Text = 'Play Dance',
+    Default = false,
+    Callback = function(v)
+        getgenv().Matcha.Dance.Enabled = v
+        getgenv().Matcha.Dance.Playing = v
+        if v and danceTrack then
+            danceTrack.Looped = true
+            danceTrack:Play()
+        elseif danceTrack then
+            danceTrack:Stop()
+        end
+    end
+}):AddKeyPicker('DanceKey', {
+    Default = 'None',
+    SyncToggleState = true,
+    Mode = 'Toggle',
+    Text = 'Dance Keybind'
+})
+
+local KeepOnDeath = false
+
+-- Animation hiện tại đang dùng
+local AnimationOptions = {
+    ["Idle1"] = "http://www.roblox.com/asset/?id=180435571",
+    ["Idle2"] = "http://www.roblox.com/asset/?id=180435792",
+    ["Walk"]  = "http://www.roblox.com/asset/?id=180426354",
+    ["Run"]   = "http://www.roblox.com/asset/?id=180426354",
+    ["Jump"]  = "http://www.roblox.com/asset/?id=125750702",
+    ["Climb"] = "http://www.roblox.com/asset/?id=180436334",
+    ["Fall"]  = "http://www.roblox.com/asset/?id=180436148"
+}
+
+-- Danh sách animation pack
+local AnimationSets = {
+    ["Default"]   = { idle1 = "180435571", idle2 = "180435792", walk = "180426354", run = "180426354", jump = "125750702", climb = "180436334", fall = "180436148" },
+    ["Ninja"]     = { idle1 = "656117400", idle2 = "656118341", walk = "656121766", run = "656118852", jump = "656117878", climb = "656114359", fall = "656115606" },
+    ["Superhero"] = { idle1 = "616111295", idle2 = "616113536", walk = "616122287", run = "616117076", jump = "616115533", climb = "616104706", fall = "616108001" },
+    ["Robot"]     = { idle1 = "616088211", idle2 = "616089559", walk = "616095330", run = "616091570", jump = "616090535", climb = "616086039", fall = "616087089" },
+    ["Cartoon"]   = { idle1 = "742637544", idle2 = "742638445", walk = "742640026", run = "742638842", jump = "742637942", climb = "742636889", fall = "742637151" },
+    ["Catwalk"]   = { idle1 = "133806214992291", idle2 = "94970088341563", walk = "109168724482748", run = "81024476153754", jump = "116936326516985", climb = "119377220967554", fall = "92294537340807" },
+    ["Zombie"]    = { idle1 = "616158929", idle2 = "616160636", walk = "616168032", run = "616163682", jump = "616161997", climb = "616156119", fall = "616157476" },
+    ["Mage"]      = { idle1 = "707742142", idle2 = "707855907", walk = "707897309", run = "707861613", jump = "707853694", climb = "707826056", fall = "707829716" },
+    ["Pirate"]    = { idle1 = "750785693", idle2 = "750782770", walk = "750785693", run = "750782770", jump = "750782770", climb = "750782770", fall = "750782770" },
+    ["Knight"]    = { idle1 = "657595757", idle2 = "657568135", walk = "657552124", run = "657564596", jump = "657560148", climb = "657556206", fall = "657552124" },
+    ["Vampire"]   = { idle1 = "1083465857", idle2 = "1083465857", walk = "1083465857", run = "1083465857", jump = "1083465857", climb = "1083465857", fall = "1083465857" },
+    ["Bubbly"]    = { idle1 = "910004836", idle2 = "910009958", walk = "910034870", run = "910025107", jump = "910016857", climb = "910009958", fall = "910009958" },
+    ["Elder"]     = { idle1 = "845386501", idle2 = "845397899", walk = "845403856", run = "845386501", jump = "845386501", climb = "845386501", fall = "845386501" },
+    ["Toy"]       = { idle1 = "782841498", idle2 = "782841498", walk = "782841498", run = "782841498", jump = "782841498", climb = "782841498", fall = "782841498" }
+}
+
+-- Hàm áp dụng animation
+local function applyCustomAnimations(character)
+    if not character or not character:FindFirstChild("Animate") then return end
+    local Animate = character.Animate
+
+    local Cloned = Animate:Clone()
+    Cloned.idle.Animation1.AnimationId = AnimationOptions.Idle1
+    Cloned.idle.Animation2.AnimationId = AnimationOptions.Idle2
+    Cloned.walk.WalkAnim.AnimationId   = AnimationOptions.Walk
+    Cloned.run.RunAnim.AnimationId     = AnimationOptions.Run
+    Cloned.jump.JumpAnim.AnimationId   = AnimationOptions.Jump
+    Cloned.climb.ClimbAnim.AnimationId = AnimationOptions.Climb
+    Cloned.fall.FallAnim.AnimationId   = AnimationOptions.Fall
+
+    Animate:Destroy()
+    Cloned.Parent = character
+end
+
+-- Áp dụng khi respawn nếu bật Keep On Death
+localPlayer.CharacterAdded:Connect(function(char)
+    if KeepOnDeath then
+        task.wait(1.5)
+        applyCustomAnimations(char)
+    end
+end)
+
+-- Tạo danh sách tên pack
+local animPackNames = {}
+for name,_ in pairs(AnimationSets) do table.insert(animPackNames, name) end
+table.sort(animPackNames)
+
+-- Hàm cập nhật 1 animation riêng lẻ
+local function updateAnimation(key, id)
+    AnimationOptions[key] = "http://www.roblox.com/asset/?id=" .. id
+    if localPlayer.Character then
+        applyCustomAnimations(localPlayer.Character)
+    end
+end
+AnimationGroup:AddDropdown('AnimPack', {
+    Values = animPackNames,
+    Default = 1,
+    Multi = false,
+    Text = 'Animation Pack',
+    Searchable = true,
+    Callback = function(value)
+        local set = AnimationSets[value]
+        updateAnimation("Idle1", set.idle1)
+        updateAnimation("Idle2", set.idle2)
+        updateAnimation("Walk",  set.walk)
+        updateAnimation("Run",   set.run)
+        updateAnimation("Jump",  set.jump)
+        updateAnimation("Climb", set.climb)
+        updateAnimation("Fall",  set.fall)
+    end
+})
+
+AnimationGroup:AddDropdown('Idle1', {
+    Values = animPackNames,
+    Default = 1,
+    Multi = false,
+    Text = 'Idle Animation 1',
+    Callback = function(v) updateAnimation("Idle1", AnimationSets[v].idle1) end
+})
+
+AnimationGroup:AddDropdown('Idle2', {
+    Values = animPackNames,
+    Default = 1,
+    Multi = false,
+    Text = 'Idle Animation 2',
+    Callback = function(v) updateAnimation("Idle2", AnimationSets[v].idle2) end
+})
+
+AnimationGroup:AddDropdown('Walk', {
+    Values = animPackNames,
+    Default = 1,
+    Multi = false,
+    Text = 'Walk Animation',
+    Callback = function(v) updateAnimation("Walk", AnimationSets[v].walk) end
+})
+
+AnimationGroup:AddDropdown('Run', {
+    Values = animPackNames,
+    Default = 1,
+    Multi = false,
+    Text = 'Run Animation',
+    Callback = function(v) updateAnimation("Run", AnimationSets[v].run) end
+})
+
+AnimationGroup:AddDropdown('Jump', {
+    Values = animPackNames,
+    Default = 1,
+    Multi = false,
+    Text = 'Jump Animation',
+    Callback = function(v) updateAnimation("Jump", AnimationSets[v].jump) end
+})
+
+AnimationGroup:AddDropdown('Climb', {
+    Values = animPackNames,
+    Default = 1,
+    Multi = false,
+    Text = 'Climb Animation',
+    Callback = function(v) updateAnimation("Climb", AnimationSets[v].climb) end
+})
+
+AnimationGroup:AddDropdown('Fall', {
+    Values = animPackNames,
+    Default = 1,
+    Multi = false,
+    Text = 'Fall Animation',
+    Callback = function(v) updateAnimation("Fall", AnimationSets[v].fall) end
+})
+
+AnimationGroup:AddToggle('KeepAnimOnDeath', {
+    Text = 'Keep On Death',
+    Default = false,
+    Tooltip = 'Giữ animation sau khi respawn',
+    Callback = function(v) KeepOnDeath = v end
+})
+getgenv().Matcha.Character = getgenv().Matcha.Character or {}
+getgenv().Matcha.Character.Noclip = false
+
+local NoclipConnection
+local function toggleNoclip(bool)
+    getgenv().Matcha.Character.Noclip = bool
+    if bool then
+        NoclipConnection = RunService.Stepped:Connect(function()
+            if localPlayer.Character then
+                for _, v in pairs(localPlayer.Character:GetDescendants()) do
+                    if v:IsA("BasePart") and v.CanCollide then
+                        v.CanCollide = false
+                    end
+                end
+            end
+        end)
+    else
+        if NoclipConnection then NoclipConnection:Disconnect() end
+    end
+end
+
+CharacterModsGroup:AddToggle('Noclip', {
+    Text = 'Noclip',
+    Default = false,
+    Callback = toggleNoclip
+}):AddKeyPicker('NoclipKey', { Default = 'N', SyncToggleState = true, Mode = 'Toggle', Text = 'Noclip' })
+
+local TrollingBox = Tabs.Misc:AddLeftGroupbox('Trolling')
+
+getgenv().jerkOffEnabled = false
+TrollingBox:AddToggle('JerkOff', {
+    Text = 'Jerk Off',
+    Default = false,
+    Callback = function(v)
+        getgenv().jerkOffEnabled = v
+        if v then
+            local speaker = game.Players.LocalPlayer
+            local humanoid = speaker.Character and speaker.Character:FindFirstChildOfClass("Humanoid")
+            local backpack = speaker:FindFirstChild("Backpack")
+            if not humanoid or not backpack then
+                Library:Notify("Character or backpack not found!", 5)
+                return
+            end
+
+            local function createJerkOffTool()
+                local tool = Instance.new("Tool")
+                tool.Name = "Jerk Off"
+                tool.ToolTip = "in the stripped club. straight up \"jorking it\" . and by \"it\" , haha, well. let's justr say. My peanits."
+                tool.RequiresHandle = false
+                tool.Parent = backpack
+
+                local jorkin = false
+                local track = nil
+
+                local function stopTomfoolery()
+                    jorkin = false
+                    if track then
+                        track:Stop()
+                        track = nil
+                    end
+                end
+
+                tool.Equipped:Connect(function()
+                    jorkin = true
+                end)
+                tool.Unequipped:Connect(stopTomfoolery)
+                humanoid.Died:Connect(stopTomfoolery)
+
+                task.spawn(function()
+                    while task.wait() do
+                        if not jorkin then continue end
+                        local isR15 = humanoid.RigType == Enum.HumanoidRigType.R15
+                        if not track then
+                            local anim = Instance.new("Animation")
+                            anim.AnimationId = isR15 and "rbxassetid://698251653" or "rbxassetid://72042024"
+                            track = humanoid:LoadAnimation(anim)
+                        end
+                        track:Play()
+                        track:AdjustSpeed(isR15 and 0.7 or 0.65)
+                        track.TimePosition = 0.6
+                        task.wait(0.1)
+                        while track and track.TimePosition < (isR15 and 0.7 or 0.65) do
+                            task.wait(0.1)
+                        end
+                        if track then
+                            track:Stop()
+                            track = nil
+                        end
+                    end
+                end)
+            end
+
+            createJerkOffTool()
+        else
+            local speaker = game.Players.LocalPlayer
+            local backpack = speaker:FindFirstChild("Backpack")
+            local character = speaker.Character
+            if backpack then
+                local toolInBackpack = backpack:FindFirstChild("Jerk Off")
+                if toolInBackpack then
+                    toolInBackpack:Destroy()
+                end
+            end
+            if character then
+                local toolInCharacter = character:FindFirstChild("Jerk Off")
+                if toolInCharacter then
+                    toolInCharacter:Destroy()
+                end
+            end
         end
     end
 })
@@ -2781,11 +5845,11 @@ getgenv().CreateTool = function()
         getgenv().Boombox = game.Players.LocalPlayer.Backpack:FindFirstChild("[Boombox]")
         if getgenv().Boombox then
             getgenv().Boombox.Parent = game.Players.LocalPlayer.Character
-            game:GetService("ReplicatedStorage").MainEvent:FireServer("Boombox", tonumber(getgenv().SoundId))
+            MainEvent:FireServer("Boombox", tonumber(getgenv().SoundId))
             getgenv().Boombox.RequiresHandle = false
             getgenv().Boombox.Parent = game.Players.LocalPlayer.Backpack
             task.wait(1)
-            game:GetService("ReplicatedStorage").MainEvent:FireServer("BoomboxStop")
+            MainEvent:FireServer("BoomboxStop")
         else
             getgenv().Sound = Instance.new("Sound", workspace)
             getgenv().Sound.SoundId = "rbxassetid://" .. getgenv().SoundId
@@ -2817,1837 +5881,968 @@ game:GetService("RunService").Heartbeat:Connect(function()
         getgenv().HumanoidRootPart.Velocity = getgenv().originalVelocity
     end
 end)
+TrollingBox:AddToggle('Pqnd4Kick', {
+    Text = 'Pqnd4 Kick Tool',
+    Default = false,
+    Callback = function(v)
+        getgenv().ToolEnabled = v
+        if v then getgenv().CreateTool() else getgenv().RemoveTool() end
+    end
+})
+local AnimPackBox = Tabs.Misc:AddLeftGroupbox('Animation Packs')
+local hasLoadedPacks = false
 
+AnimPackBox:AddButton({
+    Text = 'Load Animation Packs',
+    Func = function()
+        if hasLoadedPacks then
+            return
+        end
+        hasLoadedPacks = true
+        loadstring(game:HttpGet("https://raw.githubusercontent.com/Kazamatcha/matcha.tea/refs/heads/main/animationspacks"))()
+    end
+})
 
-game.Players.LocalPlayer.CharacterAdded:Connect(function()
-    if getgenv().ToolEnabled then task.wait(1) getgenv().CreateTool() end
-end)
-
-local Modifications = Tabs.Misc:AddRightGroupbox("Modifications")
+local MiscBox = Tabs.Misc:AddRightGroupbox('Misc')
 
 local antiStompActive = false
-local flashbackActive = false
-local lastPosition = nil
 
-local function startAntiStomp()
-    local RunService = game:GetService("RunService")
-
-    local function checkAndKill()
-        local chr = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-        local hum = chr:WaitForChild("Humanoid", 5)
-        local bodyEffects = chr:WaitForChild("BodyEffects", 5)
-
-        if not bodyEffects or not hum then
-            warn("BodyEffects or Humanoid not found in the character!")
-            return
-        end
-
-        local koValue = bodyEffects:WaitForChild("K.O", 5)
-        if not koValue then
-            warn("K.O value not found!")
-            return
-        end
-
-        local connection
-        connection = RunService.Heartbeat:Connect(function()
-            if not antiStompActive then
-                connection:Disconnect()
-                return
+local lastDeathPosition = nil
+RunService.Heartbeat:Connect(function()
+    local chr = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+    local hum = chr:FindFirstChildOfClass("Humanoid")
+    if not hum then return end
+    local bodyEffects = chr:FindFirstChild("BodyEffects")
+    if not bodyEffects then return end
+    local koValue = bodyEffects:FindFirstChild("K.O")
+    -------------------------
+    -- ANTI STOMP XỬ LÝ --
+    -------------------------
+    if antiStompActive then
+        if hum.Health <= 5 or (koValue and koValue.Value) then
+            -- Bỏ tool nếu đang cầm
+            local tool = chr:FindFirstChildOfClass("Tool")
+            if tool then
+                tool.Parent = LocalPlayer.Backpack
             end
-
-            if koValue.Value == true and hum.Health > 0 then
-                if flashbackActive then
-                    lastPosition = chr:GetPrimaryPartCFrame()
+            -- Xóa body parts
+            for _, v in pairs(chr:GetChildren()) do
+                if v:IsA("MeshPart") or v:IsA("Part") then
+                    v:Destroy()
                 end
-                hum.Health = 0
             end
-        end)
-    end
-
-    checkAndKill()
-
-    LocalPlayer.CharacterAdded:Connect(function(newCharacter)
-        if antiStompActive then
-            checkAndKill()
-
-            if flashbackActive and lastPosition then
-                local rootPart = newCharacter:WaitForChild("HumanoidRootPart", 5)
-                if rootPart then
-                    while (rootPart.Position - lastPosition.Position).Magnitude > 5 do
-                        rootPart.CFrame = lastPosition
-                        task.wait()
+            -- Xóa phụ kiện
+            for _, v in pairs(chr:GetChildren()) do
+                if v:IsA("Accessory") then
+                    if v:FindFirstChild("Handle") then
+                        v.Handle:Destroy()
                     end
                 end
-                lastPosition = nil
             end
         end
-    end)
-end
+    end
 
-stutz:AddToggle('AntiStomp', {
+end)
+
+
+MiscBox:AddToggle('AntiStomp', {
     Text = 'Anti Stomp',
     Default = false,
-    Callback = function(state)
-        antiStompActive = state
-        if state then
-            startAntiStomp()
-        end
-    end,
-})
-
-stutz:AddToggle('Flashback', {
-    Text = 'Flashback',
-    Default = false,
-    Callback = function(state)
-        flashbackActive = state
-    end,
-})
-
-getgenv().XZQW_ENABLED = false
-getgenv().HIDE_ANIMATIONS = false
-getgenv().YRWL_Connection___ = {}
-getgenv().BlockedAnimations = {
-    "rbxassetid://2788289281",
-    "rbxassetid://507766388",
-    "rbxassetid://2788292075",
-    "rbxassetid://278829075",
-    "rbxassetid://4798175381",
-    "rbxassetid://2953512033",
-    "rbxassetid://2788309982",
-    "rbxassetid://2788312709",
-    "rbxassetid://2788313790",
-    "rbxassetid://2788316350",
-    "rbxassetid://2788315673",
-    "rbxassetid://2788314837"
-}
-
-
-ReplicatedStorage:WaitForChild("ClientAnimations").Block.AnimationId = "rbxassetid://0"
-
-local function startAutoBlock()
-    table.insert(getgenv().YRWL_Connection___, RunService.Stepped:Connect(function()
-        if getgenv().XZQW_ENABLED then
-            local character = LocalPlayer.Character
-            if character and character:FindFirstChild("BodyEffects") then
-                local bodyEffects = character.BodyEffects
-                if bodyEffects:FindFirstChild("Block") then
-                    bodyEffects.Block:Destroy()
-                end
-                local tool = character:FindFirstChildWhichIsA("Tool")
-                if tool and tool:FindFirstChild("Ammo") then
-                    ReplicatedStorage.MainEvent:FireServer("Block", false)
-                else
-                    ReplicatedStorage.MainEvent:FireServer("Block", true)
-                    wait()
-                    ReplicatedStorage.MainEvent:FireServer("Block", false)
-                end
-            end
-        end
-    end))
-end
-
-local function stopAutoBlock()
-    for _, connection in ipairs(getgenv().YRWL_Connection___) do
-        connection:Disconnect()
+    Callback = function(v)
+        antiStompActive = v
     end
-    table.clear(getgenv().YRWL_Connection___)
-end
-
-local function startHidingAnimations()
-    RunService:BindToRenderStep("Hide - Block", 0, function()
-        if getgenv().HIDE_ANIMATIONS then
-            local character = LocalPlayer.Character
-            if character then
-                local humanoid = character:FindFirstChildWhichIsA("Humanoid")
-                if humanoid then
-                    for _, animationTrack in pairs(humanoid:GetPlayingAnimationTracks()) do
-                        if table.find(getgenv().BlockedAnimations, animationTrack.Animation.AnimationId) then
-                            animationTrack:Stop()
-                        end
-                    end
-                end
-            end
-        end
-    end)
-end
-
-local function stopHidingAnimations()
-    RunService:UnbindFromRenderStep("Hide - Block")
-end
-
-local RightGroupbox = Tabs.Character:AddRightGroupbox('Auto Block Settings')
-
-RightGroupbox:AddToggle('AutoBlock', {
-    Text = 'God Block',
-    Default = false,
-
-    Callback = function(state)
-        getgenv().XZQW_ENABLED = state
-        if state then
-            startAutoBlock()
-        else
-            stopAutoBlock()
-        end
-    end,
 })
-
-local Depbox = RightGroupbox:AddDependencyBox()
-
-Depbox:AddToggle('HideAnimations', {
-    Text = 'Hide Animations',
-    Default = false,
-
-    Callback = function(state)
-        getgenv().HIDE_ANIMATIONS = state
-        if state then
-            startHidingAnimations()
-        else
-            stopHidingAnimations()
-        end
-    end,
-})
-
-Depbox:SetupDependencies({
-    { Toggles.AutoBlock, true }
-})
-
-CASH_AURA_ENABLED = false
-COOLDOWN = 0.2
-CASH_AURA_RANGE = 17
-
-function GetCash()
-    local Found = {}
-    local Drop = workspace:FindFirstChild("Ignored") and workspace.Ignored:FindFirstChild("Drop")
-    
-    if Drop then
-        for _, v in pairs(Drop:GetChildren()) do 
-            if v.Name == "MoneyDrop" then 
-                local Pos = v:GetAttribute("OriginalPos") or v.Position
-                
-                if game.Players.LocalPlayer.Character and game.Players.LocalPlayer.Character:FindFirstChild("HumanoidRootPart") and 
-                   (Pos - game.Players.LocalPlayer.Character.HumanoidRootPart.Position).Magnitude <= CASH_AURA_RANGE then
-                    table.insert(Found, v)
-                end
-            end
-        end
-    end
-    
-    return Found
-end
-
-function CashAura()
-    while CASH_AURA_ENABLED do
-        local Cash = GetCash()
-        
-        for _, v in pairs(Cash) do
-            local clickDetector = v:FindFirstChildOfClass("ClickDetector")
-            if clickDetector then
-                fireclickdetector(clickDetector)
-            end
-        end
-        
-        task.wait(COOLDOWN)
-    end
-end
-
-stutz:AddToggle('Cash_Aura_Toggle', {
-    Text = 'Cash Aura',
+local antiBagConnection
+MiscBox:AddToggle('AntiBag', {
+    Text = 'Anti Bag',
     Default = false,
     Callback = function(Value)
-        CASH_AURA_ENABLED = Value
-        if CASH_AURA_ENABLED then
-            task.spawn(CashAura)
-        end
-    end
-})
-
-local autoReloadEnabled = false
-local reloadMethod = "Normal"
-
-function startAutoReload()
-    _G.Connection = game:GetService("RunService").RenderStepped:Connect(function()
-        if not autoReloadEnabled then
-            _G.Connection:Disconnect()
-            return
-        end
-
-        local tool = game.Players.LocalPlayer.Character and game.Players.LocalPlayer.Character:FindFirstChildWhichIsA("Tool")
-        local ammo = tool and tool:FindFirstChild("Ammo")
-        if ammo and ammo.Value <= (reloadMethod == "Rifle" and 1 or 0) then
-            game:GetService("ReplicatedStorage").MainEvent:FireServer("Reload", tool)
-            task.wait(3.7)
-        end
-    end)
-end
-
-stutz:AddToggle('AntiStomp', {
-    Text = 'Auto Reload',
-    Default = false,
-
-    Callback = function(state)
-        autoReloadEnabled = state
-        _G.AutoReloadEnabled = state
-        if state then
-            startAutoReload()
-        end
-    end,
-})
-
-stutz:AddDropdown('MyDropdown', {
-    Values = { 'Normal', 'Rifle'},
-    Default = "Normal",
-    Multi = false,
-
-    Text = 'Reload Method',
-
-    Callback = function(selected)
-        reloadMethod = selected
-    end
-})
-
-
-
-
-local Workspace = game:GetService("Workspace")
-
-local ShopFolder = Workspace:WaitForChild("Ignored"):WaitForChild("Shop")
-local SelectedItem, Debounce = nil, false
-local AutoBuyOnRespawn = false
-local AmmoBuyCount = 0
-
-local ShopItems = {
-    "[Taco] - $2",
-    "[Hamburger] - $5",
-    "[Revolver] - $1421",
-    "12 [Revolver Ammo] - $55",
-    "90 [AUG Ammo] - $87",
-    "[AUG] - $2131",
-    "[Rifle] - $1694",
-    "[LMG] - $4098",
-    "200 [LMG Ammo] - $328",
-}
-
-AutoBuy:AddDropdown('Shop_Dropdown', {
-    Values = ShopItems,
-    Default = 1,
-    Multi = false,
-    Text = 'Select an Item',
-    Callback = function(Value)
-        SelectedItem = Value
-    end
-})
-
-local function GetCharacterRoot()
-    local Character = LocalPlayer.Character
-    return Character and Character:FindFirstChild("HumanoidRootPart")
-end
-
-local function BuyItem(ItemName)
-    if not ItemName or Debounce then return end
-    Debounce = true
-
-    local wasDesyncEnabled = desync.enabled
-    if wasDesyncEnabled then
-        toggleDesync(false)
-        task.wait(0.1)
-    end
-
-    local RootPart = GetCharacterRoot()
-    if not RootPart then 
-        Library:Notify("[ERROR] No HumanoidRootPart found!", 3)
-        Debounce = false
-        return
-    end
-
-    local ItemModel = ShopFolder:FindFirstChild(ItemName)
-    if ItemModel then
-        local ClickDetector = ItemModel:FindFirstChildOfClass("ClickDetector")
-        if ClickDetector then
-            local OriginalPosition = RootPart.CFrame
-
-            RootPart.CFrame = CFrame.new(ItemModel.Head.Position + Vector3.new(0, 3, 0))
-            task.wait(0.2)
-
-            fireclickdetector(ClickDetector)
-
-            Library:Notify("Purchased: " .. ItemName, 3)
-
-            RootPart.CFrame = OriginalPosition
+        if Value then
+            antiBagConnection = RunService.Heartbeat:Connect(function()
+                if localPlayer.Character:FindFirstChild('Christmas_Sock') then
+                    localPlayer.Character:FindFirstChild('Christmas_Sock'):Destroy() 
+                end
+            end)
         else
-            Library:Notify("[ERROR] ClickDetector not found in " .. ItemName, 3)
-        end
-    else
-        Library:Notify("[ERROR] Item not found: " .. ItemName, 3)
-    end
-
-    if wasDesyncEnabled then
-        task.wait(0.2)
-        toggleDesync(true)
-    end
-
-    Debounce = false
-end
-
-local function BuyAmmo()
-    if not SelectedItem or Debounce then return end
-
-    local AmmoMap = {
-        ["[Revolver] - $1421"] = "12 [Revolver Ammo] - $55",
-        ["[AUG] - $2131"] = "90 [AUG Ammo] - $87",
-        ["[LMG] - $4098"] = "200 [LMG Ammo] - $328",
-        ["[Rifle] - $1694"] = "5 [Rifle Ammo] - $273",
-    }
-
-    local AmmoItem = AmmoMap[SelectedItem]
-    if AmmoItem then
-        BuyItem(AmmoItem)
-    else
-        Library:Notify("[ERROR] No ammo available.", 3)
-    end
-end
-
-local function AutoBuyOnRespawnHandler()
-    if not AutoBuyOnRespawn or not SelectedItem then return end
-
-    BuyItem(SelectedItem)
-
-    if AmmoBuyCount < 3 then
-        for i = 1, 3 do
-            BuyAmmo()
-            task.wait(0.5)
-        end
-        AmmoBuyCount = 3
-    end
-end
-
-AutoBuy:AddToggle('AutoBuyOnRespawn', {
-    Text = 'Auto Buy on Respawn',
-    Default = false,
-    Callback = function(state)
-        AutoBuyOnRespawn = state
-        AmmoBuyCount = 0
-    end
-})
-
-local buy = AutoBuy:AddButton({
-    Text = 'Buy Item',
-    Func = function()
-        BuyItem(SelectedItem)
-    end,
-    DoubleClick = false,
-    Tooltip = 'Buys the selected item'
-})
-
-buy:AddButton({
-    Text = 'Buy Ammo',
-    Func = function()
-        BuyAmmo()
-    end,
-    DoubleClick = false,
-    Tooltip = 'Buys ammo for the selected weapon'
-})
-
-LocalPlayer.CharacterAdded:Connect(function()
-    task.wait(1)
-    ShopFolder = Workspace:WaitForChild("Ignored"):WaitForChild("Shop")
-    AutoBuyOnRespawnHandler()
-end)
-
-stutz:AddToggle('AntiVoid', {
-    Text = 'Anti Void',
-    Default = false,
-
-    Callback = function(immatouchyoumaddie)
-		if immatouchyoumaddie then
-			workspace.FallenPartsDestroyHeight = -math.huge
-		else
-			Workspace.FallenPartsDestroyHeight = -50
-		end
-    end,
-})
-
-getgenv().autoArmorEnabled = false
-getgenv().autoFArmorEnabled = false
-getgenv().armorThreshold = 75
-getgenv().fArmorThreshold = 75
-
-local player = game:GetService("Players").LocalPlayer
-local dataFolder = player:WaitForChild("DataFolder")
-local armorInfo = dataFolder:WaitForChild("Information"):FindFirstChild("ArmorSave") or nil
-local fireArmorInfo = dataFolder:WaitForChild("Information"):FindFirstChild("FireArmorSave") or nil
-local armorShop = workspace.Ignored.Shop["[High-Medium Armor] - $2513"]
-local fireArmorShop = workspace.Ignored.Shop["[Fire Armor] - $2623"]
-local armorClickDetector = armorShop.ClickDetector
-local fireArmorClickDetector = fireArmorShop.ClickDetector
-
-local function canBuyArmor()
-    local character = player.Character
-    if not character then return false end
-    local humanoid = character:FindFirstChild("Humanoid")
-    if humanoid and humanoid.Health <= 1 then return false end
-    local bodyEffects = character:FindFirstChild("BodyEffects")
-    local isKO = bodyEffects and bodyEffects:FindFirstChild("K.O") and bodyEffects["K.O"].Value
-    if isKO then return false end
-    return true
-end
-
-local function teleportAndBuy(shop, clickDetector)
-    local character = player.Character
-    if not character or not character.PrimaryPart then return end
-
-    local originalPosition = character.PrimaryPart.CFrame
-    task.wait(0.1)
-
-    character:SetPrimaryPartCFrame(shop.Head.CFrame * CFrame.new(0, 3.1, 0))
-    task.wait(0.2)
-
-    fireclickdetector(clickDetector)
-    task.wait(0.1)
-
-    character:SetPrimaryPartCFrame(originalPosition)
-    task.wait(0.1)
-end
-
-local function buyArmor()
-    if armorInfo and getgenv().autoArmorEnabled and tonumber(armorInfo.Value) < getgenv().armorThreshold and canBuyArmor() then
-        local wasDesyncEnabled = desync.enabled
-        if wasDesyncEnabled then
-            toggleDesync(false)
-        end
-
-        teleportAndBuy(armorShop, armorClickDetector)
-
-        if wasDesyncEnabled then
-            toggleDesync(true)
-        end
-    end
-end
-
-local function buyFireArmor()
-    if fireArmorInfo and getgenv().autoFArmorEnabled and tonumber(fireArmorInfo.Value) < getgenv().fArmorThreshold and canBuyArmor() then
-        local wasDesyncEnabled = desync.enabled
-        if wasDesyncEnabled then
-            toggleDesync(false)
-        end
-
-        teleportAndBuy(fireArmorShop, fireArmorClickDetector)
-
-        if wasDesyncEnabled then
-            toggleDesync(true)
-        end
-    end
-end
-
-local function checkArmor()
-    while task.wait(0.1) do
-        if armorInfo then
-            buyArmor()
-        end
-        if fireArmorInfo then
-            buyFireArmor()
-        end
-    end
-end
-
-player.CharacterAdded:Connect(function()
-    task.wait(1.4)
-    checkArmor()
-end)
-
-task.spawn(checkArmor)
-
-stutz:AddToggle('AutoArmorToggle', {
-    Text = 'Auto Armor',
-    Default = false,
-    Callback = function(state)
-        getgenv().autoArmorEnabled = state
-    end,
-})
-
-stutz:AddSlider('ArmorThresholdSlider', {
-    Text = 'Armor Threshold',
-    Default = 75,
-    Min = 1,
-    Max = 130,
-    Rounding = 0,
-    Callback = function(value)
-        getgenv().armorThreshold = value
-    end,
-})
-
-stutz:AddToggle('AutoFArmorToggle', {
-    Text = 'Auto Fire Armor',
-    Default = false,
-    Callback = function(state)
-        getgenv().autoFArmorEnabled = state
-    end,
-})
-
-stutz:AddSlider('FArmorThresholdSlider', {
-    Text = 'Fire Armor Threshold',
-    Default = 75,
-    Min = 1,
-    Max = 130,
-    Rounding = 0,
-    Callback = function(value)
-        getgenv().fArmorThreshold = value
-    end,
-})
-
-stutz:AddToggle("AntiSitToggle", {
-    Text = "Anti Sit",
-    Default = false,
-    Callback = function(state)
-        getgenv().antiSitEnabled = state
-        for _, seat in ipairs(workspace:GetDescendants()) do
-            if seat:IsA("Seat") or seat:IsA("VehicleSeat") then
-                seat.CanTouch = not state
-            end
-        end
-
-        workspace.DescendantAdded:Connect(function(seat)
-            if getgenv().antiSitEnabled and (seat:IsA("Seat") or seat:IsA("VehicleSeat")) then
-                seat.CanTouch = false
-            end
-        end)
-    end
-})
-
-getgenv().AntiRPGDesyncEnabled, getgenv().GrenadeDetectionEnabled, getgenv().AntiRPGDesyncLoop = false, false, nil
-local RunService, Workspace, LocalPlayer = game:GetService("RunService"), game.Workspace, game.Players.LocalPlayer
-
-local function IsThreatNear(threatName)
-    local Threat = Workspace:FindFirstChild("Ignored") and Workspace.Ignored:FindFirstChild(threatName)
-    local HRP = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-    return Threat and HRP and (Threat.Position - HRP.Position).Magnitude < 16
-end
-
-local function StartThreatDetection()
-    if getgenv().AntiRPGDesyncLoop then return end
-
-    getgenv().AntiRPGDesyncLoop = RunService.PostSimulation:Connect(function()
-        local HRP, Humanoid = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart"), LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid")
-        if not HRP or not Humanoid then return end
-
-        local RPGThreat = Workspace.Ignored:FindFirstChild("Model") and Workspace.Ignored.Model:FindFirstChild("Launcher")
-        local GrenadeThreat = IsThreatNear("Handle")
-
-        if (getgenv().AntiRPGDesyncEnabled and RPGThreat or getgenv().GrenadeDetectionEnabled and GrenadeThreat) then
-            local Offset = Vector3.new(math.random(-100, 100), math.random(50, 150), math.random(-100, 100))
-            Humanoid.CameraOffset = -Offset
-            local OldCFrame = HRP.CFrame
-            HRP.CFrame = CFrame.new(HRP.CFrame.Position + Offset)
-            RunService.RenderStepped:Wait()
-            HRP.CFrame = OldCFrame
-        end
-    end)
-
-    LocalPlayer.CharacterAdded:Connect(function()
-        task.wait(1)
-        if getgenv().AntiRPGDesyncEnabled or getgenv().GrenadeDetectionEnabled then StartThreatDetection() end
-    end)
-end
-
-local function StopThreatDetection()
-    if getgenv().AntiRPGDesyncLoop then
-        getgenv().AntiRPGDesyncLoop:Disconnect()
-        getgenv().AntiRPGDesyncLoop = nil
-    end
-end
-
-stutz:AddToggle('RPGDetection', {
-    Text = 'RPG detection',
-    Default = false,
-    Callback = function(state)
-        getgenv().AntiRPGDesyncEnabled = state
-        if state or getgenv().GrenadeDetectionEnabled then StartThreatDetection() else StopThreatDetection() end
-    end,
-})
-
-stutz:AddToggle('GrenadeDetection', {
-    Text = 'grenade detection',
-    Default = false,
-    Callback = function(state)
-        getgenv().GrenadeDetectionEnabled = state
-        if state or getgenv().AntiRPGDesyncEnabled then StartThreatDetection() else StopThreatDetection() end
-    end,
-})
-
-local webhook = stutz:AddButton('Redeem Codes', function()
-    local codes = {
-        "HAPPYNEWYEAR26", "XMASEVE25", "XMAS2025"
-  }
-
-   local mainEvent = game:GetService("ReplicatedStorage"):WaitForChild("MainEvent") or nil
-
-   for _, code in pairs(codes) do
-       mainEvent:FireServer("EnterPromoCode", code)
-       Library:Notify("Trying code: " .. code .. " Havoc.cc | Private", 5)
-       task.wait(4.2)
-   end
-end)
-
-webhook:AddButton('Force Reset', function()
-    game.Players.LocalPlayer.Character.Humanoid.Health = 0
-end)
-
-stutz:AddButton('Chat Spy', function()
-    enabled = true --chat "/spy" to toggle!
-    spyOnMyself = true --if true will check your messages too
-    public = false --if true will chat the logs publicly (fun, risky)
-    publicItalics = true --if true will use /me to stand out
-    privateProperties = { --customize private logs
-        Color = Color3.fromRGB(0,255,255); 
-        Font = Enum.Font.SourceSansBold;
-        TextSize = 18;
-    }
-    
-    
-    local StarterGui = game:GetService("StarterGui")
-    local Players = game:GetService("Players")
-    local player = Players.LocalPlayer or Players:GetPropertyChangedSignal("LocalPlayer"):Wait() or Players.LocalPlayer
-    local saymsg = game:GetService("ReplicatedStorage"):WaitForChild("DefaultChatSystemChatEvents"):WaitForChild("SayMessageRequest")
-    local getmsg = game:GetService("ReplicatedStorage"):WaitForChild("DefaultChatSystemChatEvents"):WaitForChild("OnMessageDoneFiltering")
-    local instance = (_G.chatSpyInstance or 0) + 1
-    _G.chatSpyInstance = instance
-    
-    local function onChatted(p,msg)
-        if _G.chatSpyInstance == instance then
-            if p==player and msg:lower():sub(1,4)=="/spy" then
-                enabled = not enabled
-                wait(0.3)
-                privateProperties.Text = "{SPY "..(enabled and "EN" or "DIS").."ABLED}"
-                StarterGui:SetCore("ChatMakeSystemMessage",privateProperties)
-            elseif enabled and (spyOnMyself==true or p~=player) then
-                msg = msg:gsub("[\n\r]",''):gsub("\t",' '):gsub("[ ]+",' ')
-                local hidden = true
-                local conn = getmsg.OnClientEvent:Connect(function(packet,channel)
-                    if packet.SpeakerUserId==p.UserId and packet.Message==msg:sub(#msg-#packet.Message+1) and (channel=="All" or (channel=="Team" and public==false and Players[packet.FromSpeaker].Team==player.Team)) then
-                        hidden = false
-                    end
-                end)
-                wait(1)
-                conn:Disconnect()
-                if hidden and enabled then
-                    if public then
-                        saymsg:FireServer((publicItalics and "/me " or '').."{SPY} [".. p.Name .."]: "..msg,"All")
-                    else
-                        privateProperties.Text = "{SPY} [".. p.Name .."]: "..msg
-                        StarterGui:SetCore("ChatMakeSystemMessage",privateProperties)
-                    end
-                end
+            if antiBagConnection then
+                antiBagConnection:Disconnect()
+                antiBagConnection = nil
             end
         end
     end
-    
-    for _,p in ipairs(Players:GetPlayers()) do
-        p.Chatted:Connect(function(msg) onChatted(p,msg) end)
-    end
-    Players.PlayerAdded:Connect(function(p)
-        p.Chatted:Connect(function(msg) onChatted(p,msg) end)
-    end)
-    privateProperties.Text = "{SPY "..(enabled and "EN" or "DIS").."ABLED}"
-    StarterGui:SetCore("ChatMakeSystemMessage",privateProperties)
-    if not player.PlayerGui:FindFirstChild("Chat") then wait(3) end
-    local chatFrame = player.PlayerGui.Chat.Frame
-    chatFrame.ChatChannelParentFrame.Visible = true
-    chatFrame.ChatBarParentFrame.Position = chatFrame.ChatChannelParentFrame.Position+UDim2.new(UDim.new(),chatFrame.ChatChannelParentFrame.Size.Y)
-    
-end)
+})
 
-
-local flashbackBox = Tabs.Misc:AddRightGroupbox("Detection")
-local antiModEnabled, checkModFriendsEnabled, groupCheckEnabled = false, false, false
-local antiModMethod = "Notify"
-
-
-local modList = {
-    163721789, 15427717, 201454243, 822999, 63794379, 17260230, 28357488,
-    93101606, 8195210, 89473551, 16917269, 85989579, 1553950697, 476537893,
-    155627580, 31163456, 7200829, 25717070, 201454243, 15427717, 63794379,
-    16138978, 60660789, 17260230, 16138978, 1161411094, 9125623, 11319153,
-    34758833, 194109750, 35616559, 1257271138, 28885841, 23558830, 25717070,
-    4255947062, 29242182, 2395613299, 3314981799, 3390225662, 2459178,
-    2846299656, 2967502742, 7001683347, 7312775547, 328566086, 170526279,
-    99356639, 352087139, 6074834798, 2212830051, 3944434729, 5136267958,
-    84570351, 542488819, 1830168970, 3950637598, 1962396833
-}
-
-local groupIDs = {10604500, 17215700}
-
-local function detectModerators()
-    while antiModEnabled do
-        task.wait(1)
-        for _, player in ipairs(Players:GetPlayers()) do
-            if table.find(modList, player.UserId) then
-                local message = "⚠️ MODERATOR DETECTED: " .. player.DisplayName .. " (" .. player.Name .. ")"
-                if antiModMethod == "Notify" then
-                    Library:Notify(message, 3)
-                else
-                    game.Players.LocalPlayer:Kick("🚨 " .. message)
-                end
-            end
-
-            if groupCheckEnabled then
-                for _, groupID in ipairs(groupIDs) do
-                    local success, isInGroup = pcall(function() return player:IsInGroup(groupID) end)
-                    if success and isInGroup then
-                        local roleName = "Unknown Role"
-                        pcall(function()
-                            roleName = player:GetRoleInGroup(groupID)
-                        end)
-
-                        local groupMessage = "⚠️ [" .. roleName .. "] JOINED: " .. player.DisplayName .. " (" .. player.Name .. ")"
-                        if antiModMethod == "Notify" then
-                            Library:Notify(groupMessage, 3)
-                        else
-                            game.Players.LocalPlayer:Kick("🚨 " .. groupMessage)
-                        end
-                    end
-                end
-            end
-        end
-    end
-end
-
-local function checkFriendsWithMods()
-    while checkModFriendsEnabled do
-        task.wait(1)
-        for _, player in ipairs(Players:GetPlayers()) do
-            pcall(function()
-                for _, friend in pairs(player:GetFriendsAsync():GetCurrentPage()) do
-                    if table.find(modList, friend.Id) then
-                        local friendMessage = "⚠️ " .. player.DisplayName .. " (" .. player.Name .. ") is friends with a Moderator!"
-                        Library:Notify(friendMessage, 4)
-                        break
+local antiGrabConnection
+MiscBox:AddToggle('AntiGrab', {
+    Text = 'Anti Grab',
+    Default = false,
+    Callback = function(Value)
+        if Value then
+            antiGrabConnection = RunService.Heartbeat:Connect(function()
+                local GC = localPlayer.Character:FindFirstChild("GRABBING_CONSTRAINT")
+                if GC then
+                    GC:Destroy()
+                    wait(0.04)
+                    local humanoid = localPlayer.Character:FindFirstChildWhichIsA('Humanoid')
+                    if humanoid then
+                        humanoid.Sit = true
                     end
                 end
             end)
-        end
-    end
-end
-
-local AntiModToggle = flashbackBox:AddToggle("AntiModToggle", {
-    Text = "Mod Detection",
-    Default = false,
-    Callback = function(Value)
-        antiModEnabled = Value
-        Library:Notify(antiModEnabled and "✅ Anti-Mod Enabled" or "⚠️ Anti-Mod Disabled", 3)
-        if antiModEnabled then task.spawn(detectModerators) end
-    end
-})
-
-local AntiModDepbox = flashbackBox:AddDependencyBox()
-AntiModDepbox:SetupDependencies({ { AntiModToggle, true } })
-
-AntiModDepbox:AddDropdown("AntiModMethod", {
-    Values = {"Notify", "Kick"},
-    Default = "Notify",
-    Multi = false,
-    Text = "Anti-Mod Method",
-    Callback = function(Value)
-        antiModMethod = Value
-        Library:Notify("ℹ️ Anti-Mod Method set to: " .. antiModMethod, 3)
-    end
-})
-
-AntiModDepbox:AddToggle("CheckModFriends", {
-    Text = "Friended Checking",
-    Tooltip = "Detects if any player is friends with a Moderator",
-    Default = false,
-    Callback = function(Value)
-        checkModFriendsEnabled = Value
-        Library:Notify(checkModFriendsEnabled and "✅ Checking for Mod Friends Enabled" or "⚠️ Checking for Mod Friends Disabled", 3)
-        if checkModFriendsEnabled then task.spawn(checkFriendsWithMods) end
-    end
-})
-
-local GroupCheckDepbox = AntiModDepbox:AddDependencyBox()
-GroupCheckDepbox:SetupDependencies({ { AntiModToggle, true } })
-
-GroupCheckDepbox:AddToggle("GroupCheck", {
-    Text = "Group Role Checking",
-    Tooltip = "Detects if any player is in the restricted groups",
-    Default = false,
-    Callback = function(Value)
-        groupCheckEnabled = Value
-        Library:Notify(groupCheckEnabled and "✅ Group Membership Check Enabled" or "⚠️ Group Membership Check Disabled", 3)
-        if groupCheckEnabled then task.spawn(detectModerators) end
-    end
-})
-
-local LeftGroupBox = Tabs.Misc:AddLeftGroupbox("Animation")
-
-local KeepOnDeath = false
-
-local AnimationOptions = {
-    ["Idle1"] = "http://www.roblox.com/asset/?id=180435571",
-    ["Idle2"] = "http://www.roblox.com/asset/?id=180435792",
-    ["Walk"] = "http://www.roblox.com/asset/?id=180426354",
-    ["Run"] = "http://www.roblox.com/asset/?id=180426354",
-    ["Jump"] = "http://www.roblox.com/asset/?id=125750702",
-    ["Climb"] = "http://www.roblox.com/asset/?id=180436334",
-    ["Fall"] = "http://www.roblox.com/asset/?id=180436148"
-}
-
-local AnimationSets = {
-    ["Default"] = {
-        idle1 = "http://www.roblox.com/asset/?id=180435571",
-        idle2 = "http://www.roblox.com/asset/?id=180435792",
-        walk = "http://www.roblox.com/asset/?id=180426354",
-        run = "http://www.roblox.com/asset/?id=180426354",
-        jump = "http://www.roblox.com/asset/?id=125750702",
-        climb = "http://www.roblox.com/asset/?id=180436334",
-        fall = "http://www.roblox.com/asset/?id=180436148"
-    },
-    ["Ninja"] = {
-        idle1 = "http://www.roblox.com/asset/?id=656117400",
-        idle2 = "http://www.roblox.com/asset/?id=656118341",
-        walk = "http://www.roblox.com/asset/?id=656121766",
-        run = "http://www.roblox.com/asset/?id=656118852",
-        jump = "http://www.roblox.com/asset/?id=656117878",
-        climb = "http://www.roblox.com/asset/?id=656114359",
-        fall = "http://www.roblox.com/asset/?id=656115606"
-    },
-    ["Superhero"] = {
-        idle1 = "http://www.roblox.com/asset/?id=616111295",
-        idle2 = "http://www.roblox.com/asset/?id=616113536",
-        walk = "http://www.roblox.com/asset/?id=616122287",
-        run = "http://www.roblox.com/asset/?id=616117076",
-        jump = "http://www.roblox.com/asset/?id=616115533",
-        climb = "http://www.roblox.com/asset/?id=616104706",
-        fall = "http://www.roblox.com/asset/?id=616108001"
-    },
-    ["Robot"] = {
-        idle1 = "http://www.roblox.com/asset/?id=616088211",
-        idle2 = "http://www.roblox.com/asset/?id=616089559",
-        walk = "http://www.roblox.com/asset/?id=616095330",
-        run = "http://www.roblox.com/asset/?id=616091570",
-        jump = "http://www.roblox.com/asset/?id=616090535",
-        climb = "http://www.roblox.com/asset/?id=616086039",
-        fall = "http://www.roblox.com/asset/?id=616087089"
-    },
-    ["Cartoon"] = {
-        idle1 = "http://www.roblox.com/asset/?id=742637544",
-        idle2 = "http://www.roblox.com/asset/?id=742638445",
-        walk = "http://www.roblox.com/asset/?id=742640026",
-        run = "http://www.roblox.com/asset/?id=742638842",
-        jump = "http://www.roblox.com/asset/?id=742637942",
-        climb = "http://www.roblox.com/asset/?id=742636889",
-        fall = "http://www.roblox.com/asset/?id=742637151"
-    },
-    ["Catwalk"] = {
-        idle1 = "http://www.roblox.com/asset/?id=133806214992291",
-        idle2 = "http://www.roblox.com/asset/?id=94970088341563",
-        walk = "http://www.roblox.com/asset/?id=109168724482748",
-        run = "http://www.roblox.com/asset/?id=81024476153754",
-        jump = "http://www.roblox.com/asset/?id=116936326516985",
-        climb = "http://www.roblox.com/asset/?id=119377220967554",
-        fall = "http://www.roblox.com/asset/?id=92294537340807"
-    },
-    ["Zombie"] = {
-        idle1 = "http://www.roblox.com/asset/?id=616158929",
-        idle2 = "http://www.roblox.com/asset/?id=616160636",
-        walk = "http://www.roblox.com/asset/?id=616168032",
-        run = "http://www.roblox.com/asset/?id=616163682",
-        jump = "http://www.roblox.com/asset/?id=616161997",
-        climb = "http://www.roblox.com/asset/?id=616156119",
-        fall = "http://www.roblox.com/asset/?id=616157476"
-    },
-    ["Mage"] = {
-        idle1 = "http://www.roblox.com/asset/?id=707742142",
-        idle2 = "http://www.roblox.com/asset/?id=707855907",
-        walk = "http://www.roblox.com/asset/?id=707897309",
-        run = "http://www.roblox.com/asset/?id=707861613",
-        jump = "http://www.roblox.com/asset/?id=707853694",
-        climb = "http://www.roblox.com/asset/?id=707826056",
-        fall = "http://www.roblox.com/asset/?id=707829716"
-    },
-    ["Pirate"] = {
-        idle1 = "http://www.roblox.com/asset/?id=750785693",
-        idle2 = "http://www.roblox.com/asset/?id=750782770",
-        walk = "http://www.roblox.com/asset/?id=750785693",
-        run = "http://www.roblox.com/asset/?id=750782770",
-        jump = "http://www.roblox.com/asset/?id=750782770",
-        climb = "http://www.roblox.com/asset/?id=750782770",
-        fall = "http://www.roblox.com/asset/?id=750782770"
-    },
-    ["Knight"] = {
-        idle1 = "http://www.roblox.com/asset/?id=657595757",
-        idle2 = "http://www.roblox.com/asset/?id=657568135",
-        walk = "http://www.roblox.com/asset/?id=657552124",
-        run = "http://www.roblox.com/asset/?id=657564596",
-        jump = "http://www.roblox.com/asset/?id=657560148",
-        climb = "http://www.roblox.com/asset/?id=657556206",
-        fall = "http://www.roblox.com/asset/?id=657552124"
-    },
-    ["Vampire"] = {
-        idle1 = "http://www.roblox.com/asset/?id=1083465857",
-        idle2 = "http://www.roblox.com/asset/?id=1083465857",
-        walk = "http://www.roblox.com/asset/?id=1083465857",
-        run = "http://www.roblox.com/asset/?id=1083465857",
-        jump = "http://www.roblox.com/asset/?id=1083465857",
-        climb = "http://www.roblox.com/asset/?id=1083465857",
-        fall = "http://www.roblox.com/asset/?id=1083465857"
-    },
-    ["Bubbly"] = {
-        idle1 = "http://www.roblox.com/asset/?id=910004836",
-        idle2 = "http://www.roblox.com/asset/?id=910009958",
-        walk = "http://www.roblox.com/asset/?id=910034870",
-        run = "http://www.roblox.com/asset/?id=910025107",
-        jump = "http://www.roblox.com/asset/?id=910016857",
-        climb = "http://www.roblox.com/asset/?id=910009958",
-        fall = "http://www.roblox.com/asset/?id=910009958"
-    },
-    ["Elder"] = {
-        idle1 = "http://www.roblox.com/asset/?id=845386501",
-        idle2 = "http://www.roblox.com/asset/?id=845397899",
-        walk = "http://www.roblox.com/asset/?id=845403856",
-        run = "http://www.roblox.com/asset/?id=845386501",
-        jump = "http://www.roblox.com/asset/?id=845386501",
-        climb = "http://www.roblox.com/asset/?id=845386501",
-        fall = "http://www.roblox.com/asset/?id=845386501"
-    },
-    ["Toy"] = {
-        idle1 = "http://www.roblox.com/asset/?id=782841498",
-        idle2 = "http://www.roblox.com/asset/?id=782841498",
-        walk = "http://www.roblox.com/asset/?id=782841498",
-        run = "http://www.roblox.com/asset/?id=782841498",
-        jump = "http://www.roblox.com/asset/?id=782841498",
-        climb = "http://www.roblox.com/asset/?id=782841498",
-        fall = "http://www.roblox.com/asset/?id=782841498"
-    }
-}
-
-local function applyCustomAnimations(character)
-    if not character then return end
-
-    local Animate = character:FindFirstChild("Animate")
-    if not Animate then return end
-
-    local ClonedAnimate = Animate:Clone()
-
-    ClonedAnimate.idle.Animation1.AnimationId = AnimationOptions["Idle1"]
-    ClonedAnimate.idle.Animation2.AnimationId = AnimationOptions["Idle2"]
-    ClonedAnimate.walk.WalkAnim.AnimationId = AnimationOptions["Walk"]
-    ClonedAnimate.run.RunAnim.AnimationId = AnimationOptions["Run"]
-    ClonedAnimate.jump.JumpAnim.AnimationId = AnimationOptions["Jump"]
-    ClonedAnimate.climb.ClimbAnim.AnimationId = AnimationOptions["Climb"]
-    ClonedAnimate.fall.FallAnim.AnimationId = AnimationOptions["Fall"]
-
-    Animate:Destroy()
-    ClonedAnimate.Parent = character
-end
-
-LocalPlayer.CharacterAdded:Connect(function(character)
-    if KeepOnDeath then
-        task.wait(1)
-        applyCustomAnimations(character)
-    end
-end)
-
-local animationNames = {"Default", "Ninja", "Superhero", "Robot", "Cartoon", "Catwalk", "Zombie", "Mage", "Pirate", "Knight", "Vampire", "Bubbly", "Elder", "Toy"}
-
-LeftGroupBox:AddDropdown("Idle1Dropdown", {
-    Values = animationNames,
-    Default = 0,
-    Multi = false,
-    Text = "Idle1",
-    Callback = function(Value)
-        AnimationOptions["Idle1"] = AnimationSets[Value].idle1
-        applyCustomAnimations(LocalPlayer.Character)
-    end
-})
-
-LeftGroupBox:AddDropdown("Idle2Dropdown", {
-    Values = animationNames,
-    Default = 0,
-    Multi = false,
-    Text = "Idle2",
-    Callback = function(Value)
-        AnimationOptions["Idle2"] = AnimationSets[Value].idle2
-        applyCustomAnimations(LocalPlayer.Character)
-    end
-})
-
-LeftGroupBox:AddDropdown("WalkDropdown", {
-    Values = animationNames,
-    Default = 0,
-    Multi = false,
-    Text = "Walk",
-    Callback = function(Value)
-        AnimationOptions["Walk"] = AnimationSets[Value].walk
-        applyCustomAnimations(LocalPlayer.Character)
-    end
-})
-
-LeftGroupBox:AddDropdown("RunDropdown", {
-    Values = animationNames,
-    Default = 0,
-    Multi = false,
-    Text = "Run",
-    Callback = function(Value)
-        AnimationOptions["Run"] = AnimationSets[Value].run
-        applyCustomAnimations(LocalPlayer.Character)
-    end
-})
-
-LeftGroupBox:AddDropdown("JumpDropdown", {
-    Values = animationNames,
-    Default = 0,
-    Multi = false,
-    Text = "Jump",
-    Callback = function(Value)
-        AnimationOptions["Jump"] = AnimationSets[Value].jump
-        applyCustomAnimations(LocalPlayer.Character)
-    end
-})
-
-LeftGroupBox:AddDropdown("ClimbDropdown", {
-    Values = animationNames,
-    Default = 0,
-    Multi = false,
-    Text = "Climb",
-    Callback = function(Value)
-        AnimationOptions["Climb"] = AnimationSets[Value].climb
-        applyCustomAnimations(LocalPlayer.Character)
-    end
-})
-
-LeftGroupBox:AddDropdown("FallDropdown", {
-    Values = animationNames,
-    Default = 0,
-    Multi = false,
-    Text = "Fall",
-    Callback = function(Value)
-        AnimationOptions["Fall"] = AnimationSets[Value].fall
-        applyCustomAnimations(LocalPlayer.Character)
-    end
-})
-
-LeftGroupBox:AddToggle("MyToggle", {
-    Text = "Keep On Death",
-    Default = false,
-    Tooltip = "Keeps the animation after respawning",
-    Callback = function(Value)
-        KeepOnDeath = Value
-    end
-})
-
-getgenv().SelectedTarget = nil
-getgenv().SelectedTeleportType = "unsafe"
-getgenv().PlayerList = {}
-getgenv().groupIDs = {10604500, 17215700}
-getgenv().autoKillEnabled = false
-getgenv().orbitStompEnabled = false
-getgenv().lastPosition = nil
-getgenv().strafeEnabled = false
-getgenv().AutoAmmoEnabled = false
-getgenv().oldPosition = nil
-getgenv().invisiblePart = nil
-getgenv().isActionRunning = false -- To track if an action is running
-
-function updatePlayerList()
-    getgenv().PlayerList = {}
-    for _, player in ipairs(Players:GetPlayers()) do
-        table.insert(getgenv().PlayerList, player.Name)
-    end
-    if getgenv().TargetDropdown then
-        getgenv().TargetDropdown:SetValues(getgenv().PlayerList)
-    end
-end
-
-updatePlayerList()
-
-Players.PlayerAdded:Connect(updatePlayerList)
-Players.PlayerRemoving:Connect(updatePlayerList)
-
-function knockTarget(targetPlayer)
-    local character = targetPlayer.Character
-    local humanoid = character:FindFirstChild("Humanoid")
-    local bodyEffects = character:FindFirstChild("BodyEffects")
-    
-    if not bodyEffects or not humanoid then
-        warn("BodyEffects or Humanoid not found in the character!")
-        return
-    end
-    
-    local koValue = bodyEffects:WaitForChild("K.O", 5)
-    if not koValue then
-        warn("K.O value not found!")
-        return
-    end
-    
-    local oldPosition = LocalPlayer.Character.HumanoidRootPart.Position
-    
-    task.spawn(function()
-        while not koValue.Value and getgenv().isActionRunning do
-            local targetPosition = character.HumanoidRootPart.Position
-            LocalPlayer.Character.HumanoidRootPart.CFrame = CFrame.new(targetPosition + Vector3.new(0, -20, 0))
-            
-            local tool = LocalPlayer.Character:FindFirstChildWhichIsA("Tool")
-            if tool and tool:FindFirstChild("Ammo") then
-                ReplicatedStorage.MainEvent:FireServer("ShootGun", tool:FindFirstChild("Handle"), tool:FindFirstChild("Handle").CFrame.Position, character.Head.Position, character.Head, Vector3.new(0, 0, -1))
-            end
-            
-            task.wait()
-        end
-        
-        LocalPlayer.Character.HumanoidRootPart.CFrame = CFrame.new(oldPosition)
-    end)
-end
-
-
-function bringTarget(targetPlayer)
-    getgenv().character = targetPlayer.Character
-    if not getgenv().character then return end
-    
-    getgenv().humanoid = getgenv().character:FindFirstChild("Humanoid")
-    getgenv().bodyEffects = getgenv().character:FindFirstChild("BodyEffects")
-    if not getgenv().bodyEffects or not getgenv().humanoid then return end
-    
-    getgenv().koValue = getgenv().bodyEffects:FindFirstChild("K.O")
-    if not getgenv().koValue then return end
-
-    getgenv().localCharacter = LocalPlayer.Character
-    if not getgenv().localCharacter then return end
-
-    getgenv().humanoidRootPart = getgenv().localCharacter:FindFirstChild("HumanoidRootPart")
-    if not getgenv().humanoidRootPart then return end
-    
-    getgenv().oldPosition = getgenv().humanoidRootPart.Position
-    getgenv().isActionRunning = true
-
-    task.spawn(function()
-        while not getgenv().koValue.Value and getgenv().isActionRunning do
-            getgenv().targetPosition = getgenv().character:FindFirstChild("HumanoidRootPart") and getgenv().character.HumanoidRootPart.Position or nil
-            if getgenv().targetPosition then
-                getgenv().humanoidRootPart.CFrame = CFrame.new(getgenv().targetPosition + Vector3.new(0, -20, 0))
-            end
-            
-            getgenv().tool = getgenv().localCharacter:FindFirstChildWhichIsA("Tool")
-            if getgenv().tool and getgenv().tool:FindFirstChild("Ammo") then
-                game:GetService("ReplicatedStorage").MainEvent:FireServer(
-                    "ShootGun",
-                    getgenv().tool:FindFirstChild("Handle"),
-                    getgenv().tool:FindFirstChild("Handle").CFrame.Position,
-                    getgenv().character.Head.Position,
-                    getgenv().character.Head,
-                    Vector3.new(0, 0, -1)
-                )
-            end
-
-            task.wait()
-        end
-        
-        repeat
-            if getgenv().koValue.Value then
-                getgenv().isActionRunning = false
-                getgenv().humanoidRootPart.CFrame = CFrame.new(getgenv().oldPosition)
-                return
-            end
-
-            getgenv().upperTorso = getgenv().character:FindFirstChild("UpperTorso")
-            if getgenv().upperTorso then
-                getgenv().humanoidRootPart.CFrame = CFrame.new(getgenv().upperTorso.Position + Vector3.new(0, 3, 0))
-                game:GetService("RunService").RenderStepped:Wait()
-            end
-            
-            game:GetService("ReplicatedStorage"):WaitForChild("MainEvent"):FireServer("Grabbing", false)
-            task.wait(0.1)
-        until getgenv().character:FindFirstChild("GRABBING_CONSTRAINT")
-        task.wait(0.2)
-
-        getgenv().humanoidRootPart.CFrame = CFrame.new(getgenv().oldPosition)
-    end)
-end
-
-function stompTarget(targetPlayer)
-    getgenv().character = targetPlayer.Character
-    getgenv().humanoid = getgenv().character:FindFirstChild("Humanoid")
-    getgenv().bodyEffects = getgenv().character:FindFirstChild("BodyEffects")
-    
-    if not getgenv().bodyEffects or not getgenv().humanoid then
-        warn("BodyEffects or Humanoid not found in the character!")
-        return
-    end
-    
-    getgenv().koValue = getgenv().bodyEffects:WaitForChild("K.O", 5)
-    getgenv().sDeathValue = getgenv().bodyEffects:WaitForChild("SDeath", 5)
-    if not getgenv().koValue or not getgenv().sDeathValue then
-        warn("K.O or SDeath value not found!")
-        return
-    end
-    
-    getgenv().oldPosition = LocalPlayer.Character.HumanoidRootPart.Position
-    
-    task.spawn(function()
-        while not getgenv().koValue.Value and getgenv().isActionRunning do
-            getgenv().targetPosition = getgenv().character.HumanoidRootPart.Position
-            LocalPlayer.Character.HumanoidRootPart.CFrame = CFrame.new(getgenv().targetPosition + Vector3.new(0, -20, 0))
-            
-            getgenv().tool = LocalPlayer.Character:FindFirstChildWhichIsA("Tool")
-            if getgenv().tool and getgenv().tool:FindFirstChild("Ammo") then
-                ReplicatedStorage.MainEvent:FireServer("ShootGun", getgenv().tool:FindFirstChild("Handle"), getgenv().tool:FindFirstChild("Handle").CFrame.Position, getgenv().character.Head.Position, getgenv().character.Head, Vector3.new(0, 0, -1))
-            end
-            
-            task.wait()
-        end
-        
-        while not getgenv().sDeathValue.Value and getgenv().isActionRunning do
-            getgenv().upperTorso = getgenv().character:FindFirstChild("UpperTorso")
-            if getgenv().upperTorso then
-                getgenv().humanoidRootPart = LocalPlayer.Character:WaitForChild("HumanoidRootPart")
-                getgenv().humanoidRootPart.CFrame = CFrame.new(getgenv().upperTorso.Position + Vector3.new(0, 3, 0))
-                RunService.RenderStepped:Wait()
-            end
-            ReplicatedStorage.MainEvent:FireServer("Stomp")
-            task.wait()
-        end
-        
-        LocalPlayer.Character.HumanoidRootPart.CFrame = CFrame.new(getgenv().oldPosition)
-    end)
-end
-
-function voidTarget(targetPlayer)
-    getgenv().character = targetPlayer.Character
-    if not getgenv().character then return end
-    
-    getgenv().humanoid = getgenv().character:FindFirstChild("Humanoid")
-    getgenv().bodyEffects = getgenv().character:FindFirstChild("BodyEffects")
-    if not getgenv().bodyEffects or not getgenv().humanoid then return end
-    
-    getgenv().koValue = getgenv().bodyEffects:FindFirstChild("K.O")
-    if not getgenv().koValue then return end
-
-    getgenv().localCharacter = LocalPlayer.Character
-    if not getgenv().localCharacter then return end
-
-    getgenv().humanoidRootPart = getgenv().localCharacter:FindFirstChild("HumanoidRootPart")
-    if not getgenv().humanoidRootPart then return end
-    
-    getgenv().oldPosition = getgenv().humanoidRootPart.Position
-    getgenv().isActionRunning = true
-
-    task.spawn(function()
-        while not getgenv().koValue.Value and getgenv().isActionRunning do
-            getgenv().targetPosition = getgenv().character:FindFirstChild("HumanoidRootPart") and getgenv().character.HumanoidRootPart.Position or nil
-            if getgenv().targetPosition then
-                getgenv().humanoidRootPart.CFrame = CFrame.new(getgenv().targetPosition + Vector3.new(0, -20, 0))
-            end
-            
-            getgenv().tool = getgenv().localCharacter:FindFirstChildWhichIsA("Tool")
-            if getgenv().tool and getgenv().tool:FindFirstChild("Ammo") then
-                game:GetService("ReplicatedStorage").MainEvent:FireServer(
-                    "ShootGun",
-                    getgenv().tool:FindFirstChild("Handle"),
-                    getgenv().tool:FindFirstChild("Handle").CFrame.Position,
-                    getgenv().character.Head.Position,
-                    getgenv().character.Head,
-                    Vector3.new(0, 0, -1)
-                )
-            end
-
-            task.wait()
-        end
-        
-        repeat
-            getgenv().upperTorso = getgenv().character:FindFirstChild("UpperTorso")
-            if getgenv().upperTorso then
-                getgenv().humanoidRootPart.CFrame = CFrame.new(getgenv().upperTorso.Position + Vector3.new(0, 3, 0))
-                game:GetService("RunService").RenderStepped:Wait()
-            end
-            
-            game:GetService("ReplicatedStorage"):WaitForChild("MainEvent"):FireServer("Grabbing", false)
-            task.wait(0.2)
-        until getgenv().character:FindFirstChild("GRABBING_CONSTRAINT")
-
-        LocalPlayer.Character.HumanoidRootPart.CFrame = CFrame.new(-1000, 10000, -1000)
-        task.wait(0.3)
-        game:GetService("ReplicatedStorage"):WaitForChild("MainEvent"):FireServer("Grabbing", false)
-        task.wait(0.2)
-        getgenv().humanoidRootPart.CFrame = CFrame.new(getgenv().oldPosition)
-    end)
-end
-
-function stopAllActions()
-    getgenv().isActionRunning = false
-    if getgenv().oldPosition then
-        LocalPlayer.Character.HumanoidRootPart.CFrame = CFrame.new(getgenv().oldPosition)
-    end
-    Library:Notify("All actions stopped.", 5)
-end
-
-getgenv().Services = {
-    Players = game:GetService("Players"),
-    LocalPlayer = game:GetService("Players").LocalPlayer
-}
-
-getgenv().PlayerInfo = Tabs.Players:AddLeftGroupbox('Player Info')
-
-PlayerInfo:AddToggle('view', {
-    Text = 'View',
-    Default = false,
-    Callback = function(state)
-        if state and getgenv().SelectedTarget then
-            local targetPlayer = Services.Players:FindFirstChild(getgenv().SelectedTarget)
-            if targetPlayer and targetPlayer.Character and targetPlayer.Character:FindFirstChild("Humanoid") then
-                workspace.CurrentCamera.CameraSubject = targetPlayer.Character.Humanoid
-            end
         else
-            workspace.CurrentCamera.CameraSubject = Services.LocalPlayer.Character.Humanoid
-        end
-    end,
-})
-
-PlayerInfo:AddButton('Teleport', function()
-    local targetPlayer = Services.Players:FindFirstChild(getgenv().SelectedTarget)
-    if targetPlayer and targetPlayer.Character and targetPlayer.Character:FindFirstChild("HumanoidRootPart") then
-        Services.LocalPlayer.Character.HumanoidRootPart.CFrame = targetPlayer.Character.HumanoidRootPart.CFrame
-    end
-end)
-
-PlayerInfo:AddDropdown('teleportType', {
-    Values = { 'safe', 'unsafe' },
-    Default = 'unsafe',
-    Multi = false,
-    Text = 'Teleport Type',
-    Callback = function(value)
-        getgenv().SelectedTeleportType = value
-    end,
-})
-
-getgenv().TargetDropdown = PlayerInfo:AddDropdown('yepyep', {
-    SpecialType = 'Player',
-    Text = 'Select a Player',
-    Tooltip = 'Select a player to perform actions on.',
-    Callback = function(value)
-        getgenv().SelectedTarget = value
-    end,
-})
-
-PlayerInfo:AddInput('playerSearch', {
-    Text = 'Search Player',
-    Tooltip = 'Type to search for a player.',
-    Callback = function(value)
-        local matches = {}
-        value = string.lower(value)
-
-        for _, player in ipairs(Services.Players:GetPlayers()) do
-            local playerName = string.lower(player.Name)
-            local displayName = string.lower(player.DisplayName)
-
-            if string.find(playerName, value) or string.find(displayName, value) then
-                table.insert(matches, player.Name) -- Use actual username
+            if antiGrabConnection then
+                antiGrabConnection:Disconnect()
+                antiGrabConnection = nil
             end
-        end
-
-        options.yepyep:SetValue(matches)
-
-        if #matches == 1 then
-            Options.myPlayerDropdown:SetValue(matches[1])
-            getgenv().SelectedTarget = matches[1]
-        end
-    end,
-})
-
-
-getgenv().PlayerActions = Tabs.Players:AddRightGroupbox('Player Actions')
-
-getgenv().PlayerActions:AddDropdown('actionType', {
-    Values = { 'Knock', 'Bring', 'Stomp', 'Void' },
-    Default = 'Knock',
-    Multi = false,
-    Text = 'action',
-    Callback = function(value)
-        getgenv().SelectedAction = value
-    end,
-})
-
-getgenv().PlayerActions:AddButton('Execute Action', function()
-    local targetPlayer = Players:FindFirstChild(getgenv().SelectedTarget)
-    if targetPlayer and targetPlayer.Character then
-        local tool = LocalPlayer.Character:FindFirstChildWhichIsA("Tool")
-        if tool and tool:FindFirstChild("Ammo") then
-            getgenv().isActionRunning = true
-            getgenv().oldPosition = LocalPlayer.Character.HumanoidRootPart.Position
-            
-            if getgenv().SelectedAction == "Knock" then
-                knockTarget(targetPlayer)
-            elseif getgenv().SelectedAction == "Bring" then
-                bringTarget(targetPlayer)
-            elseif getgenv().SelectedAction == "Stomp" then
-                stompTarget(targetPlayer)
-            elseif getgenv().SelectedAction == "Void" then
-                voidTarget(targetPlayer)
-            end
-        else
-            Library:Notify("Equip a tool to use this function. | Havoc.cc", 5)
-        end
-    end
-end)
-
-PlayerActions:AddToggle("AutoKill", {
-    Text = "Auto Kill",
-    Default = false,
-    Callback = function(State)
-        getgenv().autoKillEnabled = State
-        while getgenv().autoKillEnabled and getgenv().SelectedTarget do
-            local targetPlayer = Players:FindFirstChild(getgenv().SelectedTarget)
-            if targetPlayer and targetPlayer.Character then
-                stompTarget(targetPlayer)
-            end
-            task.wait()
         end
     end
 })
+if isDaHood then
+    getgenv().CASH_AURA_ENABLED = false
+    getgenv().CASH_AURA_RANGE = 17
+    getgenv().COOLDOWN = 0.2
 
-getgenv().PlayerActions:AddButton('Stop', function()
-    stopAllActions()
-end)
+    local function GetCash()
+        local cash = {}
+        local drop = workspace:FindFirstChild("Ignored") and workspace.Ignored:FindFirstChild("Drop")
+        if not drop then return cash end
+        local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+        if not root then return cash end
 
-getgenv().AllPlayerActions = Tabs.Players:AddRightGroupbox('All Player Actions')
-
-getgenv().ShopFolder = Workspace:WaitForChild("Ignored"):WaitForChild("Shop")
-getgenv().OriginalPosition = nil
-getgenv().KillAllEnabled = false
-getgenv().StompAllEnabled = false
-getgenv().CurrentTarget = nil
-
-getgenv().BuyItem = function(itemName)
-    -- Unequip all tools before buying
-    for _, tool in pairs(LocalPlayer.Character:GetChildren()) do
-        if tool:IsA("Tool") then
-            tool.Parent = LocalPlayer.Backpack
-        end
-    end
-
-    for _, item in pairs(getgenv().ShopFolder:GetChildren()) do
-        if item.Name == itemName then
-            local itemHead = item:FindFirstChild("Head")
-            if itemHead then
-                LocalPlayer.Character.HumanoidRootPart.CFrame = itemHead.CFrame + Vector3.new(0, 3.2, 0)
-                task.wait(0.1) -- Reduced wait time for faster execution
-                fireclickdetector(item:FindFirstChild("ClickDetector"))
-            end
-            break
-        end
-    end
-end
-
-getgenv().EquipLMG = function()
-    -- Check for LMG in both Backpack and Character
-    for _, tool in pairs(LocalPlayer.Backpack:GetChildren()) do
-        if tool.Name == "[LMG]" then
-            tool.Parent = LocalPlayer.Character
-            return tool
-        end
-    end
-    for _, tool in pairs(LocalPlayer.Character:GetChildren()) do
-        if tool.Name == "[LMG]" then
-            return tool
-        end
-    end
-    return nil
-end
-
-getgenv().ShootPlayer = function(target, tool)
-    if not tool:FindFirstChild("Handle") then return end
-    local targetHead = target.Character:FindFirstChild("Head")
-    if not targetHead then return end
-    ReplicatedStorage.MainEvent:FireServer("ShootGun", tool.Handle, tool.Handle.CFrame.Position, targetHead.Position, targetHead, Vector3.new(0, 0, -1))
-end
-
-getgenv().IsKnockedOut = function(target)
-    local bodyEffects = target.Character:FindFirstChild("BodyEffects")
-    if not bodyEffects then return false end
-    local koValue = bodyEffects:FindFirstChild("K.O")
-    return koValue and koValue.Value
-end
-
-getgenv().HasForcefield = function(target)
-    return target.Character and target.Character:FindFirstChild("ForceField")
-end
-
-getgenv().IsGrabbing = function(target)
-    return target.Character and target.Character:FindFirstChild("GRABBING_CONSTRAINT")
-end
-
-getgenv().IsTooFar = function(target)
-    local distance = (LocalPlayer.Character.HumanoidRootPart.Position - target.Character.HumanoidRootPart.Position).Magnitude
-    return distance > 10000
-end
-
-getgenv().KillAllPlayers = function()
-    getgenv().OriginalPosition = LocalPlayer.Character.HumanoidRootPart.CFrame
-
-    -- Unequip all tools before buying
-    for _, tool in pairs(LocalPlayer.Character:GetChildren()) do
-        if tool:IsA("Tool") then
-            tool.Parent = LocalPlayer.Backpack
-        end
-    end
-
-    while not (LocalPlayer.Backpack:FindFirstChild("[LMG]") or LocalPlayer.Character:FindFirstChild("[LMG]")) do
-        getgenv().BuyItem("[LMG] - $4098")
-        task.wait(0.2) -- Reduced wait time for faster execution
-    end
-
-    for i = 1, 5 do
-        getgenv().BuyItem("200 [LMG Ammo] - $328")
-        task.wait(0) -- Reduced wait time for faster execution
-    end
-
-    local lmgTool = getgenv().EquipLMG()
-    if not lmgTool then return end
-
-    for _, player in pairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
-            if getgenv().HasForcefield(player) or getgenv().IsKnockedOut(player) or getgenv().IsGrabbing(player) or getgenv().IsTooFar(player) then
-                continue
-            end
-
-            getgenv().CurrentTarget = player
-            workspace.CurrentCamera.CameraSubject = player.Character.Humanoid
-
-            while not getgenv().IsKnockedOut(player) and getgenv().KillAllEnabled do
-                LocalPlayer.Character.HumanoidRootPart.CFrame = player.Character.HumanoidRootPart.CFrame - Vector3.new(0, 20, 0)
-                getgenv().ShootPlayer(player, lmgTool)
-                task.wait(0) -- Reduced wait time for faster execution
-            end
-
-            if not getgenv().KillAllEnabled then break end
-        end
-    end
-
-    if getgenv().OriginalPosition then
-        LocalPlayer.Character.HumanoidRootPart.CFrame = getgenv().OriginalPosition
-    end
-
-    workspace.CurrentCamera.CameraSubject = LocalPlayer.Character.Humanoid
-    getgenv().CurrentTarget = nil
-
-    if getgenv().StompAllEnabled then
-        getgenv().StompAllPlayers()
-    end
-end
-
-getgenv().StompAllPlayers = function()
-    for _, player in pairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
-            local character = player.Character
-            local humanoid = character:FindFirstChild("Humanoid")
-            local bodyEffects = character:FindFirstChild("BodyEffects")
-
-            if not bodyEffects or not humanoid then
-                continue
-            end
-
-            local koValue = bodyEffects:FindFirstChild("K.O")
-            local sDeathValue = bodyEffects:FindFirstChild("SDeath")
-
-            if not koValue or not sDeathValue then
-                continue
-            end
-
-            if koValue.Value and not sDeathValue.Value then
-                while not sDeathValue.Value and getgenv().StompAllEnabled do
-                    if not koValue.Value or getgenv().IsGrabbing(player) then
-                        break -- Stop stomping if K.O is lost or player is grabbed
-                    end
-
-                    local upperTorso = character:FindFirstChild("UpperTorso")
-                    if upperTorso then
-                        LocalPlayer.Character.HumanoidRootPart.CFrame = CFrame.new(upperTorso.Position + Vector3.new(0, 3, 0))
-                        RunService.RenderStepped:Wait()
-                    end
-                    ReplicatedStorage.MainEvent:FireServer("Stomp")
-                    task.wait(0) -- Reduced wait time for faster execution
+        for _, v in drop:GetChildren() do
+            if v.Name == "MoneyDrop" then
+                local pos = v:GetAttribute("OriginalPos") or v.Position
+                if (pos - root.Position).Magnitude <= getgenv().CASH_AURA_RANGE then
+                    table.insert(cash, v)
                 end
             end
         end
+        return cash
     end
+
+    local function CashAuraLoop()
+        while getgenv().CASH_AURA_ENABLED do
+            for _, money in GetCash() do
+                local cd = money:FindFirstChildOfClass("ClickDetector")
+                if cd then fireclickdetector(cd) end
+            end
+            task.wait(getgenv().COOLDOWN)
+        end
+    end
+
+    MiscBox:AddToggle('CashAura', {
+        Text = 'Cash Aura',
+        Default = false,
+        Callback = function(v)
+            getgenv().CASH_AURA_ENABLED = v
+            if v then task.spawn(CashAuraLoop) end
+        end
+    })
+    MiscBox:AddSlider('CashAuraRange', {
+        Text = 'Cash Aura Range',
+        Min = 10, Max = 50, Default = 17, Rounding = 1,
+        Callback = function(v) getgenv().CASH_AURA_RANGE = v end
+    })
+
+    MiscBox:AddSlider('CashAuraCD', {
+        Text = 'Cash Aura Cooldown',
+        Min = 0.1, Max = 1, Default = 0.2, Rounding = 2,
+        Callback = function(v) getgenv().COOLDOWN = v end
+    })
 end
 
-getgenv().AllPlayerActions:AddToggle("KillAllToggle", {
-    Text = "Kill All",
+local autoReloadEnabled = false
+local silentReloadEnabled = false
+local removeShootAnimEnabled = false
+
+RunService.Heartbeat:Connect(function()
+    if not autoReloadEnabled then return end
+    local tool = game.Players.LocalPlayer.Character and game.Players.LocalPlayer.Character:FindFirstChildOfClass("Tool")
+    if tool and tool:FindFirstChild("Ammo") and tool.Ammo.Value <= 0 then
+        pcall(function()
+            MainEvent:FireServer("Reload", tool)
+        end)
+    end
+end)
+MiscBox:AddToggle('AutoReloadToggle', {
+    Text = 'Auto Reload',
     Default = false,
-    Callback = function(value)
-        getgenv().KillAllEnabled = value
-        if value then
-            getgenv().KillAllPlayers()
+    Callback = function(v)
+        autoReloadEnabled = v
+        Library:Notify(v and "Auto Reload: ON" or "Auto Reload: OFF", 2)
+    end
+})
+
+-- ====================== RPG & GRENADE DETECTION (DA HOOD ONLY) ======================
+if isDaHood then
+    getgenv().AntiRPGDesyncEnabled = false
+    getgenv().GrenadeDetectionEnabled = false
+    getgenv().AntiRPGDesyncLoop = nil
+
+    local function StartDetection()
+        if getgenv().AntiRPGDesyncLoop then return end
+        getgenv().AntiRPGDesyncLoop = game:GetService("RunService").PostSimulation:Connect(function()
+            local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+            local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid")
+            if not hrp or not hum then return end
+
+            local rpg = workspace:FindFirstChild("Ignored") and workspace.Ignored:FindFirstChild("Model") and workspace.Ignored.Model:FindFirstChild("Launcher")
+            local grenade = workspace:FindFirstChild("Ignored") and workspace.Ignored:FindFirstChild("Handle")
+
+            local threat = (getgenv().AntiRPGDesyncEnabled and rpg) or (getgenv().GrenadeDetectionEnabled and grenade and (grenade.Position - hrp.Position).Magnitude < 16)
+            if threat then
+                local offset = Vector3.new(math.random(-100,100), math.random(50,150), math.random(-100,100))
+                hum.CameraOffset = -offset
+                local old = hrp.CFrame
+                hrp.CFrame = CFrame.new(hrp.Position + offset)
+                task.wait()
+                hrp.CFrame = old
+            end
+        end)
+    end
+
+    local function StopDetection()
+        if getgenv().AntiRPGDesyncLoop then
+            getgenv().AntiRPGDesyncLoop:Disconnect()
+            getgenv().AntiRPGDesyncLoop = nil
+        end
+    end
+
+    MiscBox:AddToggle('RPGDetect', {
+        Text = 'RPG Detection',
+        Default = false,
+        Callback = function(v)
+            getgenv().AntiRPGDesyncEnabled = v
+            if v or getgenv().GrenadeDetectionEnabled then StartDetection() else StopDetection() end
+        end
+    })
+
+    MiscBox:AddToggle('GrenadeDetect', {
+        Text = 'Grenade Detection',
+        Default = false,
+        Callback = function(v)
+            getgenv().GrenadeDetectionEnabled = v
+            if v or getgenv().AntiRPGDesyncEnabled then StartDetection() else StopDetection() end
+        end
+    })
+end
+
+MiscBox:AddToggle('ChatSpy', {
+    Text = 'Chat Spy',
+    Default = true,
+    Callback = function(v)
+        ChatEnabled = v
+        if chatWindow then chatWindow.Enabled = v end
+    end
+})
+local maxzoom = game.Players.LocalPlayer.CameraMaxZoomDistance
+MiscBox:AddToggle('InfZoom', {
+    Text = 'Infinite Zoom',
+    Default = false,
+    Callback = function(v)
+        if v then
+            game.Players.LocalPlayer.CameraMaxZoomDistance = math.huge
         else
-            if getgenv().OriginalPosition then
-                LocalPlayer.Character.HumanoidRootPart.CFrame = getgenv().OriginalPosition
-            end
-            workspace.CurrentCamera.CameraSubject = LocalPlayer.Character.Humanoid
+            game.Players.LocalPlayer.CameraMaxZoomDistance = maxzoom 
         end
     end
 })
-
-getgenv().AllPlayerActions:AddToggle("StompAllToggle", {
-    Text = "Stomp All",
-    Default = false,
-    Callback = function(value)
-        getgenv().StompAllEnabled = value
-        if value and not getgenv().KillAllEnabled then
-            getgenv().StompAllPlayers()
-        end
+local ngu = MiscBox:AddButton({
+    Text = 'Force Reset',
+    Func = function()
+        local hum = game.Players.LocalPlayer.Character and game.Players.LocalPlayer.Character:FindFirstChild("Humanoid")
+        if hum then hum.Health = 0 end
     end
 })
 
-getgenv().serenity = {}
-getgenv().AutoShootEnabled = false
+if isDaHood then
+    local DetectionBox = Tabs.Misc:AddRightGroupbox('Detection')
 
-function isPlayerInSerenity(playerName)
-    for _, name in pairs(getgenv().serenity) do
-        if name == playerName then
-            return true
-        end
-    end
-    return false
-end
+    -- Cấu hình
+    local antiModEnabled = false
+    local checkModFriendsEnabled = false
+    local groupCheckEnabled = false
+    local antiModMethod = "Notify" -- Notify / Kick
 
-function findPlayerByName(playerName)
-    for _, player in pairs(game:GetService("Players"):GetPlayers()) do
-        if player.Name:lower() == playerName:lower() then
-            return player
-        end
-    end
-    return nil
-end
+    -- Danh sách Moderator (UserId)
+    local modList = {
+        163721789, 15427717, 201454243, 822999, 63794379, 17260230, 28357488, 93101606,
+        8195210, 89473551, 16917269, 85989579, 1553950697, 476537893, 155627580,
+        31163456, 7200829, 25717070, 16138978, 60660789, 1161411094, 9125623,
+        11319153, 34758833, 194109750, 35616559, 1257271138, 28885841, 23558830,
+        4255947062, 29242182, 2395613299, 3314981799, 3390225662, 2459178,
+        2846299656, 2967502742, 7001683347, 7312775547, 328566086, 170526279,
+        99356639, 352087139, 6074834798, 2212830051, 3944434729, 5136267958,
+        84570351, 542488819, 1830168970, 3950637598, 1962396833
+    }
 
-function togglePlayerInSerenity(playerName)
-    local player = findPlayerByName(playerName)
-    
-    if not player then
-        Library:Notify("Player not found in the game!", 5)
-        return
-    end
+    -- Group ID cần kiểm tra (Da Hood Mod Group, Staff Group, v.v.)
+    local groupIDs = {10604500, 17215700}
 
-    if isPlayerInSerenity(playerName) then
-        for i, name in pairs(getgenv().serenity) do
-            if name == playerName then
-                table.remove(getgenv().serenity, i)
-                break
-            end
-        end
-        Library:Notify(playerName .. " has been removed from Serenity Mode", 5)
-    else
-        table.insert(getgenv().serenity, playerName)
-        Library:Notify(playerName .. " has been added to Serenity Mode", 5)
-    end
-end
 
-function autoEquipTool()
-    local player = game.Players.LocalPlayer
-    local backpack = player:FindFirstChild("Backpack")
-    if not backpack then return nil end
+    -- === Hàm phát hiện Moderator ===
+    local function detectMods()
+        while antiModEnabled do
+            task.wait(1.5)
+            for _, player in ipairs(Players:GetPlayers()) do
+                if player == LocalPlayer then continue end
 
-    local bestTool = nil
+                -- Kiểm tra UserId trong danh sách đen
+                if table.find(modList, player.UserId) then
+                    local msg = "MODERATOR DETECTED: " .. player.DisplayName .. " (@" .. player.Name .. ")"
+                    if antiModMethod == "Notify" then
+                        Library:Notify(msg, 5)
+                    else
+                        LocalPlayer:Kick("MOD DETECTED: " .. player.DisplayName)
+                    end
+                end
 
-    -- Prioritize tools named "Rifle" or "Aug"
-    for _, tool in pairs(backpack:GetChildren()) do
-        if tool:IsA("Tool") and tool:FindFirstChild("Ammo") then
-            local toolName = tool.Name:lower()
-            if toolName == "rifle" or toolName == "aug" then
-                bestTool = tool
-                break
-            elseif not bestTool then
-                bestTool = tool -- Fallback if no prioritized tool is found
-            end
-        end
-    end
-
-    if bestTool then
-        bestTool.Parent = player.Character -- Equip the tool
-        Library:Notify("Equipped tool: " .. bestTool.Name, 3)
-        
-        -- Wait until the tool is fully equipped
-        repeat task.wait() until player.Character:FindFirstChildOfClass("Tool") == bestTool
-
-        return bestTool
-    end
-
-    Library:Notify("No tool with Ammo found!", 3)
-    return nil
-end
-
-getgenv().ShootPlayer = function(target, tool)
-    if not tool or not tool:FindFirstChild("Handle") then return end
-    local targetHead = target.Character and target.Character:FindFirstChild("Head")
-    if not targetHead then return end
-    
-    -- Fire the shot
-    game:GetService("ReplicatedStorage").MainEvent:FireServer("ShootGun", tool.Handle, tool.Handle.CFrame.Position, targetHead.Position, targetHead, Vector3.new(0, 0, -1))
-end
-
-getgenv().playerTextBox = AllPlayerActions:AddInput('PlayerTextBox', {
-    Text = 'Serenity Mode',
-    Tooltip = 'This will add a player to a table and if they go near you, it will automatically shoot them.',
-    Default = '',
-    Finished = true,
-    Callback = function(Value)
-        if Value and Value ~= "" then
-            togglePlayerInSerenity(Value)
-        end
-    end
-})
-
-getgenv().autoShootToggle = AllPlayerActions:AddToggle('AutoShootToggle', {
-    Text = 'Auto Shoot',
-    Tooltip = 'Automatically shoots players in the Serenity table within 250 studs',
-    Default = false,
-    Callback = function(Value)
-        getgenv().AutoShootEnabled = Value
-
-        if Value then
-            while getgenv().AutoShootEnabled do
-                local character = game.Players.LocalPlayer.Character
-                local rootPart = character and character:FindFirstChild("HumanoidRootPart")
-
-                if rootPart then
-                    for _, targetPlayerName in pairs(getgenv().serenity) do
-                        local targetPlayer = game:GetService("Players"):FindFirstChild(targetPlayerName)
-                        if targetPlayer and targetPlayer.Character then
-                            local targetHead = targetPlayer.Character:FindFirstChild("Head")
-                            if targetHead then
-                                local distance = (rootPart.Position - targetHead.Position).Magnitude
-                                
-                                if distance <= 250 then
-                                    local tool = character:FindFirstChildOfClass("Tool")
-
-                                    if not tool then
-                                        tool = autoEquipTool()
-                                    end
-
-                                    if tool then
-                                        getgenv().ShootPlayer(targetPlayer, tool)
-                                    end
-                                end
+                -- Kiểm tra Group + Role (nếu bật)
+                if groupCheckEnabled then
+                    for _, groupId in ipairs(groupIDs) do
+                        local success, inGroup = pcall(player.IsInGroup, player, groupId)
+                        if success and inGroup then
+                            local role = "Unknown"
+                            pcall(function() role = player:GetRoleInGroup(groupId) end)
+                            local msg = "[" .. role .. "] JOINED: " .. player.DisplayName .. " (@" .. player.Name .. ")"
+                            if antiModMethod == "Notify" then
+                                Library:Notify(msg, 5)
+                            else
+                                LocalPlayer:Kick("STAFF DETECTED: " .. player.DisplayName)
                             end
                         end
                     end
                 end
-                task.wait(0)
             end
+        end
+    end
+
+    -- === Kiểm tra bạn bè với Mod ===
+    local function checkFriendsWithMods()
+        while checkModFriendsEnabled do
+            task.wait(8) -- Không cần check quá nhanh
+            for _, player in ipairs(Players:GetPlayers()) do
+                if player == LocalPlayer then continue end
+                pcall(function()
+                    local friends = player:GetFriendsAsync()
+                    local page = friends:GetCurrentPage()
+                    for _, friend in ipairs(page) do
+                        if table.find(modList, friend.Id) then
+                            Library:Notify(player.DisplayName .. " is friends with a Moderator!", 6)
+                            break
+                        end
+                    end
+                end)
+            end
+        end
+    end
+
+    -- === UI ===
+    local AntiModToggle = DetectionBox:AddToggle('AntiMod', {
+        Text = 'Anti Mod Detection',
+        Default = false,
+        Callback = function(v)
+            antiModEnabled = v
+            Library:Notify(v and "Anti-Mod: ON" or "Anti-Mod: OFF", 3)
+            if v then task.spawn(detectMods) end
+        end
+    })
+
+    local DepBox = DetectionBox:AddDependencyBox()
+    DepBox:SetupDependencies({{Toggles.AntiMod, true}})
+
+    DepBox:AddDropdown('AntiModMethod', {
+        Values = {"Notify", "Kick"},
+        Default = "Notify",
+        Multi = false,
+        Text = 'Action Method',
+        Callback = function(v)
+            antiModMethod = v
+            Library:Notify("Anti-Mod Action → " .. v, 3)
+        end
+    })
+
+    DepBox:AddToggle('CheckModFriends', {
+        Text = 'Check Mod Friends',
+        Default = false,
+        Tooltip = 'Warns if someone is friends with a Moderator',
+        Callback = function(v)
+            checkModFriendsEnabled = v
+            Library:Notify(v and "Mod Friends Check: ON" or "Mod Friends Check: OFF", 3)
+            if v then task.spawn(checkFriendsWithMods) end
+        end
+    })
+
+    DepBox:AddToggle('GroupCheck', {
+        Text = 'Staff Group Check',
+        Default = false,
+        Tooltip = 'Detects players in restricted Da Hood staff groups',
+        Callback = function(v)
+            groupCheckEnabled = v
+            Library:Notify(v and "Staff Group Check: ON" or "Staff Group Check: OFF", 3)
+            if v and antiModEnabled then task.spawn(detectMods) end
+        end
+    })
+
+else
+    print("Không phải Da Hood → Bỏ qua Anti-Mod Detection")
+end
+if isDaHood then 
+
+
+-- UI Setup (sửa để phù hợp với lib của bạn, giả sử sử dụng Tabs.Misc:AddLeftGroupbox('AutoBuy'))
+local AutoBuyGroup = Tabs.Misc:AddLeftGroupbox('AutoBuy')
+
+AutoBuyGroup:AddDropdown('SelectedGun', {
+    Values = {'[Rifle]', '[LMG]', '[AK47]', '[AUG]', '[AR]', '[Double-Barrel SG]', '[Drum-Shotgun]', '[DrumGun]', '[Glock]', '[P90]', '[RPG]', '[Revolver]', '[Silencer]', '[SilencerAR]', '[Shotgun]', '[SMG]', '[TacticalShotgun]', '[Taser]'},
+    Default = '[Rifle]',
+    Multi = false,
+    Text = 'Select Gun',
+    Callback = function(Value)
+        SelectedGun = Value
+    end
+})
+
+AutoBuyGroup:AddButton('Buy Selected Gun', function()
+    BuyingSingle = true
+end)
+
+AutoBuyGroup:AddToggle('BuyAmmo', {
+    Text = 'Buy Ammo',
+    Default = false,
+    Callback = function(Value)
+        BuyingAmmo = Value
+    end
+})
+
+AutoBuyGroup:AddToggle('AutoBuyGunAmmo', {
+    Text = 'Autobuy Gun + Ammo',
+    Default = false,
+    Callback = function(Value)
+        headshots.AutoLoadout.Enabled = Value
+    end
+})
+
+AutoBuyGroup:AddDropdown('AutoLoadoutGun', {
+    Values = {'[Rifle]', '[LMG]', '[AK47]', '[AUG]', '[AR]', '[Double-Barrel SG]', '[Drum-Shotgun]', '[DrumGun]', '[Glock]', '[P90]', '[RPG]', '[Revolver]', '[Silencer]', '[SilencerAR]', '[Shotgun]', '[SMG]', '[TacticalShotgun]', '[Taser]'},
+    Default = '[Rifle]',
+    Multi = false,
+    Text = 'Auto Gun',
+    Callback = function(Value)
+        headshots.AutoLoadout.Gun = Value
+    end
+})
+
+AutoBuyGroup:AddToggle('AutoArmor', {
+    Text = 'Auto Armor',
+    Default = false,
+    Callback = function(Value)
+        headshots.AutoArmor.Enabled = Value
+    end
+})
+end
+end)()
+coroutine.wrap(function()
+local lighting = game:GetService("Lighting")
+local LightingService = game:GetService("Lighting")
+local originalAmbient = LightingService.Ambient
+local originalOutdoorAmbient = LightingService.OutdoorAmbient
+local originalFogColor = LightingService.FogColor
+local originalFogStart = LightingService.FogStart
+local originalFogEnd = LightingService.FogEnd
+local originalBrightness = LightingService.Brightness
+local originalClockTime = LightingService.ClockTime
+local nebulaThemeColor = Color3.fromRGB(173, 216, 230)
+local Visuals = {}
+local WorldGroup = Tabs.Visual:AddRightGroupbox('World')
+WorldGroup:AddToggle('CustomAmbient', {
+    Text = 'Custom Ambient',
+    Default = false,
+    Callback = function(Value)
+        LightingService.Ambient = Value and AmbientColor or originalAmbient
+    end
+}):AddColorPicker('AmbientColor', {
+    Default = originalAmbient,
+    Title = 'Ambient Color',
+    Callback = function(Value)
+        AmbientColor = Value
+        if Toggles.CustomAmbient.Value then
+            LightingService.Ambient = Value
         end
     end
 })
 
-
-MenuGroup:AddButton('Unload', function() Library:Unload() end)
-MenuGroup:AddLabel('Menu bind'):AddKeyPicker('MenuKeybind', { Default = 'End', NoUI = true, Text = 'Menu keybind' })
-Library.ToggleKeybind = Options.MenuKeybind
-
-MenuGroup:AddToggle('KeybindListToggle', {
-    Text = 'Show Keybind List',
+WorldGroup:AddToggle('CustomOutdoorAmbient', {
+    Text = 'Custom Outdoor Ambient',
     Default = false,
-    Callback = function(state)
-        Library.KeybindFrame.Visible = state
+    Callback = function(Value)
+        LightingService.OutdoorAmbient = Value and OutdoorAmbientColor or originalOutdoorAmbient
+    end
+}):AddColorPicker('OutdoorAmbientColor', {
+    Default = originalOutdoorAmbient,
+    Title = 'Outdoor Ambient Color',
+    Callback = function(Value)
+        OutdoorAmbientColor = Value
+        if Toggles.CustomOutdoorAmbient.Value then
+            LightingService.OutdoorAmbient = Value
+        end
     end
 })
 
+WorldGroup:AddToggle('CustomFog', {
+    Text = 'Custom Fog',
+    Default = false,
+    Callback = function(Value)
+        if Value then
+            LightingService.FogColor = FogColor
+            LightingService.FogStart = FogStart
+            LightingService.FogEnd = FogEnd
+        else
+            LightingService.FogColor = originalFogColor
+            LightingService.FogStart = originalFogStart
+            LightingService.FogEnd = originalFogEnd
+        end
+    end
+}):AddColorPicker('FogColor', {
+    Default = originalFogColor,
+    Title = 'Fog Color',
+    Callback = function(Value)
+        FogColor = Value
+        if Toggles.CustomFog.Value then
+            LightingService.FogColor = Value
+        end
+    end
+})
+
+WorldGroup:AddSlider('FogStart', {
+    Text = 'Fog Start',
+    Min = 0,
+    Max = 1000,
+    Default = originalFogStart,
+    Rounding = 1,
+    Callback = function(Value)
+        FogStart = Value
+        if Toggles.CustomFog.Value then
+            LightingService.FogStart = Value
+        end
+    end
+})
+
+WorldGroup:AddSlider('FogEnd', {
+    Text = 'Fog End',
+    Min = 0,
+    Max = 1000,
+    Default = originalFogEnd,
+    Rounding = 1,
+    Callback = function(Value)
+        FogEnd = Value
+        if Toggles.CustomFog.Value then
+            LightingService.FogEnd = Value
+        end
+    end
+})
+
+WorldGroup:AddToggle('CustomBrightness', {
+    Text = 'Custom Brightness',
+    Default = false,
+    Callback = function(Value)
+        LightingService.Brightness = Value and BrightnessValue or originalBrightness
+    end
+})
+
+WorldGroup:AddSlider('BrightnessValue', {
+    Text = 'Brightness',
+    Min = 0,
+    Max = 10,
+    Default = originalBrightness,
+    Rounding = 1,
+    Callback = function(Value)
+        BrightnessValue = Value
+        if Toggles.CustomBrightness.Value then
+            LightingService.Brightness = Value
+        end
+    end
+})
+
+WorldGroup:AddToggle('CustomClockTime', {
+    Text = 'Custom Clock Time',
+    Default = false,
+    Callback = function(Value)
+        LightingService.ClockTime = Value and ClockTimeValue or originalClockTime
+    end
+})
+
+WorldGroup:AddSlider('ClockTimeValue', {
+    Text = 'Clock Time',
+    Min = 0,
+    Max = 24,
+    Default = originalClockTime,
+    Rounding = 1,
+    Callback = function(Value)
+        ClockTimeValue = Value
+        if Toggles.CustomClockTime.Value then
+            LightingService.ClockTime = Value
+        end
+    end
+})
+
+WorldGroup:AddToggle('NebulaTheme', {
+    Text = 'Nebula Theme',
+    Default = false,
+    Callback = function(Value)
+        if Value then
+            local b = Instance.new("BloomEffect", LightingService)
+            b.Intensity = 0.7
+            b.Size = 24
+            b.Threshold = 1
+            b.Name = "NebulaBloom"
+            local c = Instance.new("ColorCorrectionEffect", LightingService)
+            c.Saturation = 0.5
+            c.Contrast = 0.2
+            c.TintColor = nebulaThemeColor
+            c.Name = "NebulaColorCorrection"
+            local a = Instance.new("Atmosphere", LightingService)
+            a.Density = 0.4
+            a.Offset = 0.25
+            a.Glare = 1
+            a.Haze = 2
+            a.Color = nebulaThemeColor
+            a.Decay = Color3.fromRGB(173, 216, 230)
+            a.Name = "NebulaAtmosphere"
+            LightingService.Ambient = nebulaThemeColor
+            LightingService.OutdoorAmbient = nebulaThemeColor
+            LightingService.FogStart = 100
+            LightingService.FogEnd = 500
+            LightingService.FogColor = nebulaThemeColor
+        else
+            for _, name in pairs({"NebulaBloom", "NebulaColorCorrection", "NebulaAtmosphere"}) do
+                local obj = LightingService:FindFirstChild(name)
+                if obj then obj:Destroy() end
+            end
+            LightingService.Ambient = originalAmbient
+            LightingService.OutdoorAmbient = originalOutdoorAmbient
+            LightingService.FogStart = originalFogStart
+            LightingService.FogEnd = originalFogEnd
+            LightingService.FogColor = originalFogColor
+        end
+    end
+}):AddColorPicker('NebulaColor', {
+    Default = Color3.fromRGB(173, 216, 230),
+    Title = 'Nebula Color',
+    Callback = function(Value)
+        nebulaThemeColor = Value
+        if Toggles.NebulaTheme.Value then
+            local nc = LightingService:FindFirstChild("NebulaColorCorrection")
+            if nc then nc.TintColor = Value end
+            local na = LightingService:FindFirstChild("NebulaAtmosphere")
+            if na then na.Color = Value end
+            LightingService.Ambient = Value
+            LightingService.OutdoorAmbient = Value
+            LightingService.FogColor = Value
+        end
+    end
+})
+local SelectedSkybox = "HD"
+local LightingSettings = {
+    DefaultSkyboxBk = lighting.Sky.SkyboxBk,
+    DefaultSkyboxDn = lighting.Sky.SkyboxDn,
+    DefaultSkyboxFt = lighting.Sky.SkyboxFt,
+    DefaultSkyboxLf = lighting.Sky.SkyboxLf,
+    DefaultSkyboxRt = lighting.Sky.SkyboxRt,
+    DefaultSkyboxUp = lighting.Sky.SkyboxUp,
+}
+
+local DefaultSky = lighting:FindFirstChildOfClass("Sky")
+local LightingSettings = {}
+if DefaultSky then
+    LightingSettings.DefaultSkyboxBk = DefaultSky.SkyboxBk
+    LightingSettings.DefaultSkyboxDn = DefaultSky.SkyboxDn
+    LightingSettings.DefaultSkyboxFt = DefaultSky.SkyboxFt
+    LightingSettings.DefaultSkyboxLf = DefaultSky.SkyboxLf
+    LightingSettings.DefaultSkyboxRt = DefaultSky.SkyboxRt
+    LightingSettings.DefaultSkyboxUp = DefaultSky.SkyboxUp
+end
+local customSkyInstance = nil
+local SkyboxAssets = {
+    ["Black Storm"] = {
+        Bk = "rbxassetid://15502511288",
+        Dn = "rbxassetid://15502508460",
+        Ft = "rbxassetid://15502510289",
+        Lf = "rbxassetid://15502507918",
+        Rt = "rbxassetid://15502509398",
+        Up = "rbxassetid://15502511911"
+    },
+    ["HD"] = {
+        Bk = "http://www.roblox.com/asset/?id=16553658937",
+        Dn = "http://www.roblox.com/asset/?id=16553660713",
+        Ft = "http://www.roblox.com/asset/?id=16553662144",
+        Lf = "http://www.roblox.com/asset/?id=16553664042",
+        Rt = "http://www.roblox.com/asset/?id=16553665766",
+        Up = "http://www.roblox.com/asset/?id=16553667750"
+    },
+    ["Snow"] = {
+        Bk = "http://www.roblox.com/asset/?id=155657655",
+        Dn = "http://www.roblox.com/asset/?id=155674246",
+        Ft = "http://www.roblox.com/asset/?id=155657609",
+        Lf = "http://www.roblox.com/asset/?id=155657671",
+        Rt = "http://www.roblox.com/asset/?id=155657619",
+        Up = "http://www.roblox.com/asset/?id=155674931"
+    },
+    ["Blue Space"] = {
+        Bk = "rbxassetid://15536110634",
+        Dn = "rbxassetid://15536112543",
+        Ft = "rbxassetid://15536116141",
+        Lf = "rbxassetid://15536114370",
+        Rt = "rbxassetid://15536118762",
+        Up = "rbxassetid://15536117282"
+    },
+    ["Realistic"] = {
+        Bk = "rbxassetid://653719502",
+        Dn = "rbxassetid://653718790",
+        Ft = "rbxassetid://653719067",
+        Lf = "rbxassetid://653719190",
+        Rt = "rbxassetid://653718931",
+        Up = "rbxassetid://653719321"
+    },
+    ["Stormy"] = {
+        Bk = "http://www.roblox.com/asset/?id=18703245834",
+        Dn = "http://www.roblox.com/asset/?id=18703243349",
+        Ft = "http://www.roblox.com/asset/?id=18703240532",
+        Lf = "http://www.roblox.com/asset/?id=18703237556",
+        Rt = "http://www.roblox.com/asset/?id=18703235430",
+        Up = "http://www.roblox.com/asset/?id=18703232671"
+    },
+    ["Pink"] = {
+        Bk = "rbxassetid://12216109205",
+        Dn = "rbxassetid://12216109875",
+        Ft = "rbxassetid://12216109489",
+        Lf = "rbxassetid://12216110170",
+        Rt = "rbxassetid://12216110471",
+        Up = "rbxassetid://12216108877"
+    },
+    ["Sunset"] = {
+        Bk = "rbxassetid://600830446",
+        Dn = "rbxassetid://600831635",
+        Ft = "rbxassetid://600832720",
+        Lf = "rbxassetid://600886090",
+        Rt = "rbxassetid://600833862",
+        Up = "rbxassetid://600835177"
+    },
+    ["Arctic"] = {
+        Bk = "http://www.roblox.com/asset/?id=225469390",
+        Dn = "http://www.roblox.com/asset/?id=225469395",
+        Ft = "http://www.roblox.com/asset/?id=225469403",
+        Lf = "http://www.roblox.com/asset/?id=225469450",
+        Rt = "http://www.roblox.com/asset/?id=225469471",
+        Up = "http://www.roblox.com/asset/?id=225469481"
+    },
+    ["Space"] = {
+        Bk = "http://www.roblox.com/asset/?id=166509999",
+        Dn = "http://www.roblox.com/asset/?id=166510057",
+        Ft = "http://www.roblox.com/asset/?id=166510116",
+        Lf = "http://www.roblox.com/asset/?id=166510092",
+        Rt = "http://www.roblox.com/asset/?id=166510131",
+        Up = "http://www.roblox.com/asset/?id=166510114"
+    },
+    ["Roblox Default"] = {
+        Bk = "rbxasset://textures/sky/sky512_bk.tex",
+        Dn = "rbxasset://textures/sky/sky512_dn.tex",
+        Ft = "rbxasset://textures/sky/sky512_ft.tex",
+        Lf = "rbxasset://textures/sky/sky512_lf.tex",
+        Rt = "rbxasset://textures/sky/sky512_rt.tex",
+        Up = "rbxasset://textures/sky/sky512_up.tex"
+    },
+    ["Red Night"] = {
+        Bk = "http://www.roblox.com/asset/?id=401664839",
+        Dn = "http://www.roblox.com/asset/?id=401664862",
+        Ft = "http://www.roblox.com/asset/?id=401664960",
+        Lf = "http://www.roblox.com/asset/?id=401664881",
+        Rt = "http://www.roblox.com/asset/?id=401664901",
+        Up = "http://www.roblox.com/asset/?id=401664936"
+    },
+    ["Deep Space 1"] = {
+        Bk = "http://www.roblox.com/asset/?id=149397692",
+        Dn = "http://www.roblox.com/asset/?id=149397686",
+        Ft = "http://www.roblox.com/asset/?id=149397697",
+        Lf = "http://www.roblox.com/asset/?id=149397684",
+        Rt = "http://www.roblox.com/asset/?id=149397688",
+        Up = "http://www.roblox.com/asset/?id=149397702"
+    },
+    ["Pink Skies"] = {
+        Bk = "http://www.roblox.com/asset/?id=151165214",
+        Dn = "http://www.roblox.com/asset/?id=151165197",
+        Ft = "http://www.roblox.com/asset/?id=151165224",
+        Lf = "http://www.roblox.com/asset/?id=151165191",
+        Rt = "http://www.roblox.com/asset/?id=151165206",
+        Up = "http://www.roblox.com/asset/?id=151165227"
+    },
+    ["Purple Sunset"] = {
+        Bk = "rbxassetid://264908339",
+        Dn = "rbxassetid://264907909",
+        Ft = "rbxassetid://264909420",
+        Lf = "rbxassetid://264909758",
+        Rt = "rbxassetid://264908886",
+        Up = "rbxassetid://264907379"
+    },
+    ["Blue Night"] = {
+        Bk = "http://www.roblox.com/asset/?id=12064107",
+        Dn = "http://www.roblox.com/asset/?id=12064152",
+        Ft = "http://www.roblox.com/asset/?id=12064121",
+        Lf = "http://www.roblox.com/asset/?id=12063984",
+        Rt = "http://www.roblox.com/asset/?id=12064115",
+        Up = "http://www.roblox.com/asset/?id=12064131"
+    },
+    ["Blossom Daylight"] = {
+        Bk = "http://www.roblox.com/asset/?id=271042516",
+        Dn = "http://www.roblox.com/asset/?id=271077243",
+        Ft = "http://www.roblox.com/asset/?id=271042556",
+        Lf = "http://www.roblox.com/asset/?id=271042310",
+        Rt = "http://www.roblox.com/asset/?id=271042467",
+        Up = "http://www.roblox.com/asset/?id=271077958"
+    },
+    ["Blue Nebula"] = {
+        Bk = "http://www.roblox.com/asset?id=135207744",
+        Dn = "http://www.roblox.com/asset?id=135207662",
+        Ft = "http://www.roblox.com/asset?id=135207770",
+        Lf = "http://www.roblox.com/asset?id=135207615",
+        Rt = "http://www.roblox.com/asset?id=135207695",
+        Up = "http://www.roblox.com/asset?id=135207794"
+    },
+    ["Blue Planet"] = {
+        Bk = "rbxassetid://218955819",
+        Dn = "rbxassetid://218953419",
+        Ft = "rbxassetid://218954524",
+        Lf = "rbxassetid://218958493",
+        Rt = "rbxassetid://218957134",
+        Up = "rbxassetid://218950090"
+    },
+    ["Deep Space 2"] = {
+        Bk = "http://www.roblox.com/asset/?id=159248188",
+        Dn = "http://www.roblox.com/asset/?id=159248183",
+        Ft = "http://www.roblox.com/asset/?id=159248187",
+        Lf = "http://www.roblox.com/asset/?id=159248173",
+        Rt = "http://www.roblox.com/asset/?id=159248192",
+        Up = "http://www.roblox.com/asset/?id=159248176"
+    },
+    ["Summer"] = {
+        Bk = "rbxassetid://16648590964",
+        Dn = "rbxassetid://16648617436",
+        Ft = "rbxassetid://16648595424",
+        Lf = "rbxassetid://16648566370",
+        Rt = "rbxassetid://16648577071",
+        Up = "rbxassetid://16648598180"
+    },
+    ["Galaxy"] = {
+        Bk = "rbxassetid://15983968922",
+        Dn = "rbxassetid://15983966825",
+        Ft = "rbxassetid://15983965025",
+        Lf = "rbxassetid://15983967420",
+        Rt = "rbxassetid://15983966246",
+        Up = "rbxassetid://15983964246"
+    },
+    ["Stylized"] = {
+        Bk = "rbxassetid://18351376859",
+        Dn = "rbxassetid://18351374919",
+        Ft = "rbxassetid://18351376800",
+        Lf = "rbxassetid://18351376469",
+        Rt = "rbxassetid://18351376457",
+        Up = "rbxassetid://18351377189"
+    },
+    ["Minecraft"] = {
+        Bk = "rbxassetid://8735166756",
+        Dn = "http://www.roblox.com/asset/?id=8735166707",
+        Ft = "http://www.roblox.com/asset/?id=8735231668",
+        Lf = "http://www.roblox.com/asset/?id=8735166755",
+        Rt = "http://www.roblox.com/asset/?id=8735166751",
+        Up = "http://www.roblox.com/asset/?id=8735166729"
+    },
+    ["Sunset 2"] = {
+        Bk = "http://www.roblox.com/asset/?id=151165214",
+        Dn = "http://www.roblox.com/asset/?id=151165197",
+        Ft = "http://www.roblox.com/asset/?id=151165224",
+        Lf = "http://www.roblox.com/asset/?id=151165191",
+        Rt = "http://www.roblox.com/asset/?id=151165206",
+        Up = "http://www.roblox.com/asset/?id=151165227"
+    },
+    ["Cloudy Rain"] = {
+        Bk = "http://www.roblox.com/asset/?id=4498828382",
+        Dn = "http://www.roblox.com/asset/?id=4498828812",
+        Ft = "http://www.roblox.com/asset/?id=4498829917",
+        Lf = "http://www.roblox.com/asset/?id=4498830911",
+        Rt = "http://www.roblox.com/asset/?id=4498830417",
+        Up = "http://www.roblox.com/asset/?id=4498831746"
+    },
+    ["Black Cloudy Rain"] = {
+        Bk = "http://www.roblox.com/asset/?id=149679669",
+        Dn = "http://www.roblox.com/asset/?id=149681979",
+        Ft = "http://www.roblox.com/asset/?id=149679690",
+        Lf = "http://www.roblox.com/asset/?id=149679709",
+        Rt = "http://www.roblox.com/asset/?id=149679722",
+        Up = "http://www.roblox.com/asset/?id=149680199"
+    }
+}
+local function applyCustomSkybox(name)
+    if customSkyInstance then
+        customSkyInstance:Destroy()
+    end
+    customSkyInstance = Instance.new("Sky")
+    local sky = SkyboxAssets[name]
+    customSkyInstance.SkyboxBk = sky.Bk
+    customSkyInstance.SkyboxDn = sky.Dn
+    customSkyInstance.SkyboxFt = sky.Ft
+    customSkyInstance.SkyboxLf = sky.Lf
+    customSkyInstance.SkyboxRt = sky.Rt
+    customSkyInstance.SkyboxUp = sky.Up
+    customSkyInstance.Name = "CustomSky"
+    customSkyInstance.Parent = lighting
+end
+local function restoreDefaultSkybox()
+    if customSkyInstance then
+        customSkyInstance:Destroy()
+        customSkyInstance = nil
+    end
+    if DefaultSky then
+        DefaultSky.SkyboxBk = LightingSettings.DefaultSkyboxBk
+        DefaultSky.SkyboxDn = LightingSettings.DefaultSkyboxDn
+        DefaultSky.SkyboxFt = LightingSettings.DefaultSkyboxFt
+        DefaultSky.SkyboxLf = LightingSettings.DefaultSkyboxLf
+        DefaultSky.SkyboxRt = LightingSettings.DefaultSkyboxRt
+        DefaultSky.SkyboxUp = LightingSettings.DefaultSkyboxUp
+        DefaultSky.Parent = lighting
+    end
+end
+
+WorldGroup:AddToggle('CustomSkyboxEnabled', {
+    Text = 'Custom Skybox',
+    Default = false,
+    Callback = function(Value)
+        if Value then
+            applyCustomSkybox(SelectedSkybox)
+        else
+            restoreDefaultSkybox()
+        end
+    end
+})
+
+WorldGroup:AddDropdown('SkyboxSelected', {
+    Values = {"Black Storm", "HD", "Snow", "Blue Space", "Realistic", "Stormy", "Pink", "Sunset", "Arctic", "Space", "Roblox Default", "Red Night", "Deep Space 1", "Pink Skies", "Purple Sunset", "Blue Night", "Blossom Daylight", "Blue Nebula", "Blue Planet", "Deep Space 2", "Summer", "Galaxy", "Stylized", "Minecraft", "Sunset 2", "Cloudy Rain", "Black Cloudy Rain"},
+    Default = "Snow",
+    Multi = false,
+    Text = 'Skybox',
+    Callback = function(Value)
+        SelectedSkybox = Value
+        if Toggles.CustomSkyboxEnabled.Value then
+            applyCustomSkybox(SelectedSkybox)
+        end
+    end
+})
+-- UI Settings Setup
+local MenuGroup = Tabs['UI Settings']:AddLeftGroupbox('Menu')
+MenuGroup:AddToggle("KeybindMenuOpen", { Default = Library.KeybindFrame.Visible, Text = "Open Keybind Menu", Callback = function(value) Library.KeybindFrame.Visible = value end})
+MenuGroup:AddToggle("ShowCustomCursor", {Text = "Custom Cursor", Default = true, Callback = function(Value) Library.ShowCustomCursor = Value end})
+MenuGroup:AddDivider()
+MenuGroup:AddLabel("Menu bind"):AddKeyPicker("MenuKeybind", { Default = "RightShift", NoUI = true, Text = "Menu keybind" })
+MenuGroup:AddButton("Unload", function() Library:Unload() end)
 getgenv().vu = game:GetService("VirtualUser")
 getgenv().isAntiAfkEnabled = false
 getgenv().antiAfkConnection = nil
@@ -4655,6 +6850,7 @@ getgenv().antiAfkConnection = nil
 MenuGroup:AddToggle('AntiAFKToggle', {
     Text = 'Anti-AFK',
     Default = false,
+    Tooltip = 'Prevent AFK timeout',
     Callback = function(state)
         getgenv().isAntiAfkEnabled = state
         if getgenv().isAntiAfkEnabled then
@@ -4668,19 +6864,32 @@ MenuGroup:AddToggle('AntiAFKToggle', {
                 getgenv().antiAfkConnection = nil
             end
         end
-    end
+    end,
+    Disabled = false,
+    Visible = true
 })
 
-
-MenuGroup:AddButton('Copy Job ID', function()
-    setclipboard(game.JobId)
-end)
-
-MenuGroup:AddButton('Copy JS Join Script', function()
-    local jsScript = 'Roblox.GameLauncher.joinGameInstance(' .. game.PlaceId .. ', "' .. game.JobId .. '")'
-    setclipboard(jsScript)
-end)
-
+MenuGroup:AddButton({
+    Text = 'Copy Job ID',
+    Func = function()
+        setclipboard(game.JobId)
+    end,
+    Tooltip = 'Copy the current server Job ID to clipboard',
+    DoubleClick = false,
+    Disabled = false,
+    Visible = true
+})
+MenuGroup:AddButton({
+    Text = 'Copy JS Join Script',
+    Func = function()
+        local jsScript = 'Roblox.GameLauncher.joinGameInstance(' .. game.PlaceId .. ', "' .. game.JobId .. '")'
+        setclipboard(jsScript)
+    end,
+    Tooltip = 'Copy the join script for the current server',
+    DoubleClick = false,
+    Disabled = false,
+    Visible = true
+})
 MenuGroup:AddInput('JobIdInput', {
     Default = '',
     Numeric = false,
@@ -4688,44 +6897,46 @@ MenuGroup:AddInput('JobIdInput', {
     Text = '..JobId..',
     Tooltip = 'Enter a Job ID to join a specific server',
     Placeholder = 'Enter Job ID here',
+    ClearTextOnFocus = true,
     Callback = function(Value)
         game:GetService('TeleportService'):TeleportToPlaceInstance(game.PlaceId, Value, game:GetService('Players').LocalPlayer)
-    end
+    end,
+    Disabled = false,
+    Visible = true
 })
-
-
-MenuGroup:AddButton('Rejoin Server', function()
-    game:GetService("TeleportService"):TeleportToPlaceInstance(game.PlaceId, game.JobId, game.Players.LocalPlayer)
-end)
-
-
-
-ThemeManager:SetLibrary(Library)
-SaveManager:SetLibrary(Library)
-SaveManager:IgnoreThemeSettings()
-SaveManager:SetIgnoreIndexes({ 'MenuKeybind' })
-ThemeManager:SetFolder('Havoc')
-SaveManager:SetFolder('Havoc/configs')
-
-SaveManager:LoadAutoloadConfig()
-
+MenuGroup:AddButton({
+    Text = 'Rejoin Server',
+    Func = function()
+        game:GetService("TeleportService"):TeleportToPlaceInstance(game.PlaceId, game.JobId, game.Players.LocalPlayer)
+    end,
+    Tooltip = 'Rejoin the current server',
+    DoubleClick = false,
+    Disabled = false,
+    Visible = true
+})
 Library:SetWatermarkVisibility(true)
-
-local StatsService = game:GetService("Stats")
-local MarketplaceService = game:GetService("MarketplaceService")
-
+getgenv().matcha = {}
+getgenv().matcha.WatermarkEnabled = true
+getgenv().matcha.WatermarkShowFPS = true
+getgenv().matcha.WatermarkShowGameName = false
+getgenv().matcha.WatermarkShowUptime = false
+getgenv().matcha.WatermarkShowExecutor = false
+getgenv().matcha.WatermarkShowPing = true
+local Stats = game:GetService("Stats")
+-- Modified Watermark Logic
 local FrameTimer = tick()
 local FrameCounter = 0
 local FPS = 60
 local StartTime = tick()
 
 local function getExecutor()
-    if syn then return "Synapse X"
-    elseif secure_call then return "ScriptWare"
-    elseif identifyexecutor then return identifyexecutor()
-    else return "Unknown" end
+    if syn then return "Synapse X" end
+    if secure_call then return "ScriptWare" end
+    if identifyexecutor then return identifyexecutor() end
+    return "Unknown"
 end
 
+local MarketplaceService = game:GetService("MarketplaceService")
 local function getGameName(placeId)
     local success, result = pcall(function()
         return MarketplaceService:GetProductInfo(placeId).Name
@@ -4733,7 +6944,7 @@ local function getGameName(placeId)
     return success and result or "Unknown Game"
 end
 
-local WatermarkConnection = RunService.RenderStepped:Connect(function()
+local function updateWatermark()
     FrameCounter += 1
     if (tick() - FrameTimer) >= 1 then
         FPS = FrameCounter
@@ -4741,20 +6952,106 @@ local WatermarkConnection = RunService.RenderStepped:Connect(function()
         FrameCounter = 0
     end
 
-    local Ping = math.floor(StatsService.Network.ServerStatsItem["Data Ping"]:GetValue())
+    local Ping = math.floor(Stats.Network.ServerStatsItem["Data Ping"]:GetValue())
     local Executor = getExecutor()
     local Uptime = math.floor(tick() - StartTime)
     local UptimeFormatted = string.format("%02d:%02d", math.floor(Uptime / 60), Uptime % 60)
     local GameName = getGameName(game.PlaceId)
 
-    Library:SetWatermark(("[ Hvoc.cc ] |  Beta  |  %s | %s (%d) | Uptime: %s | FPS %d | %d ms"):format(
-        Executor, GameName, game.PlaceId, UptimeFormatted, math.floor(FPS), Ping
-    ))
-end)
+    local watermarkParts = {"matcha.tea"}
+    
+    if getgenv().matcha.WatermarkShowExecutor then
+        table.insert(watermarkParts, Executor)
+    end
+    if getgenv().matcha.WatermarkShowGameName then
+        table.insert(watermarkParts, string.format("%s (%d)", GameName, game.PlaceId))
+    end
+    if getgenv().matcha.WatermarkShowUptime then
+        table.insert(watermarkParts, string.format("Uptime: %s", UptimeFormatted))
+    end
+    if getgenv().matcha.WatermarkShowFPS then
+        table.insert(watermarkParts, string.format("FPS %d", math.floor(FPS)))
+    end
+    if getgenv().matcha.WatermarkShowPing then
+        table.insert(watermarkParts, string.format("%d ms", Ping))
+    end
+
+    Library:SetWatermark(table.concat(watermarkParts, " | "))
+    Library:SetWatermarkVisibility(getgenv().matcha.WatermarkEnabled)
+end
+
+local WatermarkConnection = RunService.RenderStepped:Connect(updateWatermark)
 
 
+-- Watermark Customization UI
+local WatermarkGroup = Tabs['UI Settings']:AddRightGroupbox('Watermark')
+
+WatermarkGroup:AddToggle('WatermarkEnabled', {
+    Text = 'Enabled',
+    Default = true,
+    Callback = function(Value)
+        getgenv().matcha.WatermarkEnabled = Value
+    end
+})
+
+WatermarkGroup:AddToggle('WatermarkShowFPS', {
+    Text = 'Show FPS',
+    Default = true,
+    Callback = function(Value)
+        getgenv().matcha.WatermarkShowFPS = Value
+    end
+})
+
+WatermarkGroup:AddToggle('WatermarkShowGameName', {
+    Text = 'Show Game Name',
+    Default = false,
+    Callback = function(Value)
+        getgenv().matcha.WatermarkShowGameName = Value
+    end
+})
+
+WatermarkGroup:AddToggle('WatermarkShowUptime', {
+    Text = 'Show Uptime',
+    Default = false,
+    Callback = function(Value)
+        getgenv().matcha.WatermarkShowUptime = Value
+    end
+})
+
+WatermarkGroup:AddToggle('WatermarkShowExecutor', {
+    Text = 'Show Executor',
+    Default = false,
+    Callback = function(Value)
+        getgenv().matcha.WatermarkShowExecutor = Value
+    end
+})
+
+WatermarkGroup:AddToggle('WatermarkShowPing', {
+    Text = 'Show Ping',
+    Default = true,
+    Callback = function(Value)
+        getgenv().matcha.WatermarkShowPing = Value
+    end
+})
+
+Library.ToggleKeybind = Options.MenuKeybind
+
+ThemeManager:SetLibrary(Library)
+SaveManager:SetLibrary(Library)
+
+SaveManager:IgnoreThemeSettings()
+SaveManager:SetIgnoreIndexes({ 'MenuKeybind' })
+
+ThemeManager:SetFolder('Unnamed')
+SaveManager:SetFolder('Unnamed/dahood')
+
+SaveManager:BuildConfigSection(Tabs['UI Settings'])
+ThemeManager:ApplyToTab(Tabs['UI Settings'])
+
+SaveManager:LoadAutoloadConfig()
 Library:OnUnload(function()
-    WatermarkConnection:Disconnect()
+    --WatermarkConnection:Disconnect()
     print('Unloaded!')
     Library.Unloaded = true
 end)
+end)()
